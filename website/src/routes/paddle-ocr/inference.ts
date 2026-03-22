@@ -676,6 +676,8 @@ export type Tokenizer = {
   newlineId: number;
   /** </s> = 2 — EOS used to stop generation */
   eosId: number;
+  /** <|TEXT_END|> = 101315 — structured text terminator used by OCR/table outputs */
+  textEndId: number;
 };
 
 export async function loadTokenizer(
@@ -721,6 +723,7 @@ export async function loadTokenizer(
     endSentenceId: findId("<|end_of_sentence|>") || END_SENTENCE_ID,
     newlineId: findId("<0x0A>") || NL_BYTE_ID,
     eosId: findId("</s>") || EOS_ID,
+    textEndId: findId("<|TEXT_END|>"),
   };
 }
 
@@ -1001,6 +1004,7 @@ export async function runOCR(
   maxNewTokens = 512,
   onToken?: (partial: string) => void,
   task: "ocr" | "spotting" = "ocr",
+  signal?: AbortSignal,
 ): Promise<string> {
   const { pixelValues, imageGridThw } = preprocessImage(image);
   const { prefixIds, suffixIds } = buildOcrPrompt(tok, task);
@@ -1010,12 +1014,17 @@ export async function runOCR(
   let { logits, state } = prefill(model, pixelValues, imageGridThw, prefixIds, suffixIds);
 
   const generatedIds: number[] = [];
-  const eosId = tok.eosId; // </s> = 2, confirmed by generation_config.json
+  const stopIds = new Set([2, tok.eosId, tok.endSentenceId, tok.textEndId].filter((id) => id !== 0));
 
   // Greedy decode
   // NOTE: logits.data() internally calls this.dispose(), so never call dispose() after data().
   let logitsConsumed = false;
   for (let step = 0; step < maxNewTokens; step++) {
+    if (signal?.aborted) {
+      if (!logitsConsumed) logits.dispose();
+      throw new DOMException("OCR generation stopped", "AbortError");
+    }
+
     const data = (await logits.data()) as Float32Array; // data() disposes logits internally
     logitsConsumed = true;
 
@@ -1040,9 +1049,10 @@ export async function runOCR(
       console.log(`[decode step=${step}] nextId=${nextId} token="${tok.idToToken[nextId] ?? "?"}" top5=[${top5}]`);
     }
 
-    // Stop at EOS or <|end_of_sentence|> (model closing its turn)
-    if (nextId === eosId || nextId === tok.endSentenceId) break;
+    // Stop at any terminal control token used by PaddleOCR-VL outputs.
+    if (stopIds.has(nextId)) break;
     generatedIds.push(nextId);
+
     onToken?.(decodeTokens(generatedIds, tok));
 
     ({ logits, state } = decodeStep(model, nextId, state));

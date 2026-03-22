@@ -31,6 +31,7 @@
 
   let model: PaddleOCRModel | null = null;
   let tok: Tokenizer | null = null;
+  let ocrController: AbortController | null = null;
 
   let fileInput: HTMLInputElement;
   let previewImg: HTMLImageElement | null = $state(null);
@@ -91,21 +92,33 @@
   // ── OCR inference ──────────────────────────────────────────
   async function runOCRClick() {
     if (!model || !tok || !previewImg) return;
+    ocrController?.abort();
+    ocrController = new AbortController();
     phase = "running";
     ocrResult = "";
     ocrPartial = "";
     try {
       const result = await runOCR(model, tok, previewImg, 512, (partial) => {
         ocrPartial = partial;
-      });
+      }, "ocr", ocrController.signal);
       ocrResult = result;
       ocrPartial = "";
       phase = "done";
     } catch (e: any) {
-      phase = "error";
-      errorMsg = String(e) + (e?.stack ? "\n\n" + e.stack : "");
-      console.error("OCR error:", e);
+      if (e?.name === "AbortError") {
+        phase = "ready";
+      } else {
+        phase = "error";
+        errorMsg = String(e) + (e?.stack ? "\n\n" + e.stack : "");
+        console.error("OCR error:", e);
+      }
+    } finally {
+      ocrController = null;
     }
+  }
+
+  function stopOCR() {
+    ocrController?.abort();
   }
 
   async function clearCache() {
@@ -196,6 +209,11 @@
             >
               {phase === "running" ? "Running OCR…" : "Run OCR"}
             </button>
+            {#if phase === "running"}
+              <button class="btn mt-2" onclick={stopOCR}>
+                Stop
+              </button>
+            {/if}
 
             <!-- Streaming partial result -->
             {#if ocrPartial}
