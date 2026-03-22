@@ -11,6 +11,7 @@
     runOCR,
     type Tokenizer,
   } from "./inference";
+  import { analyzeLayout, cropLayoutRegion } from "$lib/paddle-ocr/layout";
 
   // ── State ──────────────────────────────────────────────────
   type Phase =
@@ -36,6 +37,7 @@
   let fileInput: HTMLInputElement;
   let previewImg: HTMLImageElement | null = $state(null);
   let previewSrc = $state<string | null>(null);
+  let useLayoutAnalysis = $state(false);
 
   // ── Model loading ──────────────────────────────────────────
   async function loadModel() {
@@ -98,9 +100,33 @@
     ocrResult = "";
     ocrPartial = "";
     try {
-      const result = await runOCR(model, tok, previewImg, 512, (partial) => {
-        ocrPartial = partial;
-      }, "ocr", ocrController.signal);
+      let result: string;
+      if (useLayoutAnalysis) {
+        const regions = await analyzeLayout(previewImg);
+        if (regions.length === 0) {
+          result = await runOCR(model, tok, previewImg, 512, (partial) => {
+            ocrPartial = partial;
+          }, "ocr", ocrController.signal);
+        } else {
+          const chunks: string[] = [];
+          for (let i = 0; i < regions.length; i++) {
+            if (ocrController.signal.aborted) throw new DOMException("OCR generation stopped", "AbortError");
+            const crop = cropLayoutRegion(previewImg, regions[i]);
+            const chunk = await runOCR(model, tok, crop, 512, (partial) => {
+              const nextChunks = [...chunks];
+              nextChunks[i] = partial;
+              ocrPartial = nextChunks.filter(Boolean).join("\n\n");
+            }, "ocr", ocrController.signal);
+            chunks[i] = chunk.trim();
+            ocrPartial = chunks.filter(Boolean).join("\n\n");
+          }
+          result = chunks.filter(Boolean).join("\n\n");
+        }
+      } else {
+        result = await runOCR(model, tok, previewImg, 512, (partial) => {
+          ocrPartial = partial;
+        }, "ocr", ocrController.signal);
+      }
       ocrResult = result;
       ocrPartial = "";
       phase = "done";
@@ -191,6 +217,10 @@
         <button class="btn" onclick={() => fileInput.click()}>
           Choose image
         </button>
+        <label class="mt-4 flex items-center justify-center gap-2 text-sm text-gray-600">
+          <input type="checkbox" bind:checked={useLayoutAnalysis} />
+          Run layout analysis first (PPDocLayoutV3)
+        </label>
       </div>
 
       <!-- Preview -->

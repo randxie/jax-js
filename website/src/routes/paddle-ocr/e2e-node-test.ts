@@ -54,7 +54,9 @@ function loadLocalTokenizer(path: string): Tokenizer {
     endSentenceId: findId("<|end_of_sentence|>"),
     newlineId: findId("<0x0A>"),
     eosId: findId("</s>"),
+    textStartId: findId("<|TEXT_START|>"),
     textEndId: findId("<|TEXT_END|>"),
+    structuredNewlineId: findId("<nl>"),
   };
 }
 

@@ -676,8 +676,12 @@ export type Tokenizer = {
   newlineId: number;
   /** </s> = 2 — EOS used to stop generation */
   eosId: number;
-  /** <|TEXT_END|> = 101315 — structured text terminator used by OCR/table outputs */
+  /** <|TEXT_START|> = 101314 — structured text block start */
+  textStartId: number;
+  /** <|TEXT_END|> = 101315 — structured text block end */
   textEndId: number;
+  /** <nl> = 101313 — structured line break */
+  structuredNewlineId: number;
 };
 
 export async function loadTokenizer(
@@ -723,7 +727,9 @@ export async function loadTokenizer(
     endSentenceId: findId("<|end_of_sentence|>") || END_SENTENCE_ID,
     newlineId: findId("<0x0A>") || NL_BYTE_ID,
     eosId: findId("</s>") || EOS_ID,
+    textStartId: findId("<|TEXT_START|>"),
     textEndId: findId("<|TEXT_END|>"),
+    structuredNewlineId: findId("<nl>"),
   };
 }
 
@@ -731,6 +737,7 @@ export async function loadTokenizer(
  * <|LOC_N|> tokens (spotting bounding box coordinates) are passed through as-is. */
 export function decodeTokens(ids: number[], tok: Tokenizer): string {
   const bytes: number[] = [];
+  let pendingBlockBreak = false;
   for (const id of ids) {
     const token = tok.idToToken[id];
     if (!token) continue;
@@ -739,6 +746,26 @@ export function decodeTokens(ids: number[], tok: Tokenizer): string {
       for (const b of new TextEncoder().encode(token)) bytes.push(b);
       continue;
     }
+    if (id === tok.structuredNewlineId || token === "<nl>") {
+      bytes.push(0x0a);
+      pendingBlockBreak = false;
+      continue;
+    }
+    if (id === tok.textStartId || token === "<|TEXT_START|>") {
+      if (pendingBlockBreak && bytes[bytes.length - 1] !== 0x0a) bytes.push(0x0a);
+      pendingBlockBreak = false;
+      continue;
+    }
+    if (id === tok.textEndId || token === "<|TEXT_END|>") {
+      pendingBlockBreak = true;
+      continue;
+    }
+
+    if (pendingBlockBreak) {
+      if (bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) bytes.push(0x0a);
+      pendingBlockBreak = false;
+    }
+
     // Skip other control tokens (begin/end_of_sentence, IMAGE_PLACEHOLDER, etc.)
     if (token.startsWith("<|") && token.endsWith("|>")) continue;
 
@@ -1014,7 +1041,7 @@ export async function runOCR(
   let { logits, state } = prefill(model, pixelValues, imageGridThw, prefixIds, suffixIds);
 
   const generatedIds: number[] = [];
-  const stopIds = new Set([2, tok.eosId, tok.endSentenceId, tok.textEndId].filter((id) => id !== 0));
+  const stopIds = new Set([2, tok.eosId, tok.endSentenceId].filter((id) => id !== 0));
 
   // Greedy decode
   // NOTE: logits.data() internally calls this.dispose(), so never call dispose() after data().
