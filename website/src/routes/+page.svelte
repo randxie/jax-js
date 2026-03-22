@@ -52,6 +52,12 @@
       href: resolve("/mnist"),
       description: "Demo of training a neural network on MNIST.",
     },
+    {
+      title: "PaddleOCR-VL-1.5",
+      href: resolve("/paddle-ocr"),
+      description:
+        "0.9B VLM for document OCR — BF16 loading, RMSNorm, 3D RoPE, GQA.",
+    },
   ];
 </script>
 

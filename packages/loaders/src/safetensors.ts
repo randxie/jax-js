@@ -1,5 +1,6 @@
 /** Supported data types for loading from Safetensors format. */
 export type DType =
+  | "BF16" // Converted to Float32Array (Brain Float 16)
   | "F16" // Float16Array
   | "F32" // Float32Array
   | "F64" // Float64Array
@@ -12,6 +13,22 @@ export type DType =
   | "U32" // Uint32Array
   | "U64" // BigUint64Array
   | "BOOL"; // Represented as Uint8Array
+
+/**
+ * Convert a BF16 (bfloat16) buffer to a Float32Array.
+ *
+ * BF16 is simply the upper 16 bits of IEEE 754 Float32. Conversion is done by
+ * shifting each uint16 left by 16 bits to reinterpret it as a float32.
+ */
+function bf16ToFloat32(buffer: ArrayBuffer, byteOffset: number, count: number): Float32Array {
+  const out = new Float32Array(count);
+  const outInt32 = new Int32Array(out.buffer);
+  const src = new Uint16Array(buffer, byteOffset, count);
+  for (let i = 0; i < count; i++) {
+    outInt32[i] = src[i] << 16;
+  }
+  return out;
+}
 
 export type Tensor = {
   dtype: DType;
@@ -82,6 +99,10 @@ export function parse(data: Uint8Array<ArrayBuffer> | ArrayBuffer): File {
     const byteLength = data_offsets[1] - data_offsets[0];
     let data: TensorData;
     switch (dtype) {
+      case "BF16":
+        // Convert BF16 → Float32 on load (stored as Float32Array, reported as "BF16")
+        data = bf16ToFloat32(buffer, byteOffset, byteLength / 2);
+        break;
       case "F16":
         data = new Float16Array(buffer, byteOffset, byteLength / 2);
         break;
