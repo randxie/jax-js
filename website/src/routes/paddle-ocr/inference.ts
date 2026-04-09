@@ -1042,6 +1042,15 @@ export async function runOCR(
 
   const generatedIds: number[] = [];
   const stopIds = new Set([2, tok.eosId, tok.endSentenceId].filter((id) => id !== 0));
+  console.log(
+    "[runOCR] stopIds=%s eosId=%d endSentenceId=%d textStartId=%d textEndId=%d structuredNewlineId=%d",
+    JSON.stringify(Array.from(stopIds)),
+    tok.eosId,
+    tok.endSentenceId,
+    tok.textStartId,
+    tok.textEndId,
+    tok.structuredNewlineId,
+  );
 
   // Greedy decode
   // NOTE: logits.data() internally calls this.dispose(), so never call dispose() after data().
@@ -1065,8 +1074,14 @@ export async function runOCR(
       }
     }
 
-    // Debug: log first 5 tokens to console
-    if (step < 5) {
+    // Debug: log early tokens and any possible terminal/control transitions.
+    if (
+      step < 5 ||
+      stopIds.has(nextId) ||
+      nextId === tok.textStartId ||
+      nextId === tok.textEndId ||
+      nextId === tok.structuredNewlineId
+    ) {
       // Top-5 tokens
       const top5 = Array.from(data)
         .map((v, i) => ({ v, i }))
@@ -1077,8 +1092,17 @@ export async function runOCR(
     }
 
     // Stop at any terminal control token used by PaddleOCR-VL outputs.
-    if (stopIds.has(nextId)) break;
+    if (stopIds.has(nextId)) {
+      const tail = generatedIds.slice(-24).map((id) => `${id}(${tok.idToToken[id] ?? "?"})`);
+      console.log(`[decode stop] step=${step} matchedStopId=${nextId} tail=[${tail.join(", ")}]`);
+      break;
+    }
     generatedIds.push(nextId);
+
+    if (step > 0 && step % 32 === 0) {
+      const tail = generatedIds.slice(-24).map((id) => `${id}(${tok.idToToken[id] ?? "?"})`);
+      console.log(`[decode tail] step=${step} tail=[${tail.join(", ")}]`);
+    }
 
     onToken?.(decodeTokens(generatedIds, tok));
 
@@ -1087,6 +1111,10 @@ export async function runOCR(
   }
   // If we hit maxNewTokens without EOS, the final decodeStep logits was never data()'d
   if (!logitsConsumed) logits.dispose();
+  if (generatedIds.length === maxNewTokens) {
+    const tail = generatedIds.slice(-32).map((id) => `${id}(${tok.idToToken[id] ?? "?"})`);
+    console.log(`[decode maxNewTokens] maxNewTokens=${maxNewTokens} tail=[${tail.join(", ")}]`);
+  }
 
   return decodeTokens(generatedIds, tok);
 }
