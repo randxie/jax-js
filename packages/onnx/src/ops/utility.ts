@@ -2,7 +2,6 @@
 //
 // TODO: Range (prompt_encoder_mask_decoder, vision_encoder)
 // TODO: OneHot (prompt_encoder_mask_decoder)
-// TODO: ScatterND (prompt_encoder_mask_decoder)
 
 import { numpy as np } from "@jax-js/jax";
 import { TensorProto } from "onnx-buf";
@@ -60,6 +59,88 @@ export function Constant(
   } else {
     throw new Error("ONNX Constant has no value");
   }
+}
+
+/**
+ * LayerNormalization (ONNX opset 17).
+ *
+ * Normalizes the input tensor along the axes [axis, ..., rank-1], then
+ * scales and shifts using learnable parameters.
+ *
+ * Y = (X - mean) / sqrt(var + epsilon) * scale + bias
+ */
+export function LayerNormalization(
+  [xOp, scaleOp, biasOp]: Operand[],
+  { axis = -1, epsilon = 1e-5 }: { axis?: number; epsilon?: number },
+): Operand[] {
+  let x = operandToJax(xOp);
+  const rank = x.ndim;
+  if (axis < 0) axis += rank;
+
+  // Normalize over axes [axis, ..., rank-1]
+  const normAxes = Array.from({ length: rank - axis }, (_, i) => axis + i);
+
+  const mean = x.ref.mean(normAxes, { keepdims: true });
+  const diff = x.sub(mean);
+  const variance = np.square(diff.ref).mean(normAxes, { keepdims: true });
+  const invStd = np.reciprocal(np.sqrt(variance.add(epsilon)));
+  x = diff.mul(invStd);
+
+  if (scaleOp) {
+    const scale = operandToJax(scaleOp);
+    // scale shape is [features], need to broadcast to x shape
+    const broadcastShape = [
+      ...new Array(axis).fill(1),
+      ...scale.shape,
+    ];
+    x = x.mul(scale.reshape(broadcastShape));
+  }
+  if (biasOp) {
+    const bias = operandToJax(biasOp);
+    const broadcastShape = [
+      ...new Array(axis).fill(1),
+      ...bias.shape,
+    ];
+    x = x.add(bias.reshape(broadcastShape));
+  }
+
+  return [x];
+}
+
+/**
+ * InstanceNormalization (ONNX opset 6).
+ *
+ * Normalizes per (batch, channel) pair over spatial dimensions.
+ *
+ * Y[n,c,...] = (X[n,c,...] - mean) / sqrt(var + epsilon) * scale[c] + bias[c]
+ */
+export function InstanceNormalization(
+  [xOp, scaleOp, biasOp]: Operand[],
+  { epsilon = 1e-5 }: { epsilon?: number },
+): Operand[] {
+  const x = operandToJax(xOp);
+  const [, C] = x.shape;
+  const spatialAxes = Array.from({ length: x.ndim - 2 }, (_, i) => i + 2);
+
+  const mean = x.ref.mean(spatialAxes, { keepdims: true });
+  const diff = x.sub(mean);
+  const variance = np.square(diff.ref).mean(spatialAxes, { keepdims: true });
+  const invStd = np.reciprocal(np.sqrt(variance.add(epsilon)));
+  let normed = diff.mul(invStd);
+
+  if (scaleOp) {
+    const scale = operandToJax(scaleOp);
+    // scale: [C] → [1, C, 1, ...]
+    const scaleShape = [1, C, ...spatialAxes.map(() => 1)];
+    normed = normed.mul(scale.reshape(scaleShape));
+  }
+  if (biasOp) {
+    const bias = operandToJax(biasOp);
+    const biasShape = [1, C, ...spatialAxes.map(() => 1)];
+    normed = normed.add(bias.reshape(biasShape));
+  }
+
+  return [normed];
 }
 
 export function ConstantOfShape(

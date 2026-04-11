@@ -559,6 +559,9 @@ export function split(
     }
     const partSize = size / indicesOrSections;
     sizes = rep(indicesOrSections, partSize);
+  } else if (indicesOrSections.length === 0) {
+    // Empty indices = return the whole array as one section.
+    sizes = [size];
   } else {
     const indices = indicesOrSections.map((i) => (i < 0 ? i + size : i));
     sizes = [indices[0]];

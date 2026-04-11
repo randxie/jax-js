@@ -58,6 +58,12 @@
       description:
         "0.9B VLM for document OCR — BF16 loading, RMSNorm, 3D RoPE, GQA.",
     },
+    {
+      title: "SAM 3 — Segment Anything",
+      href: resolve("/sam3"),
+      description:
+        "Open-vocabulary segmentation with text prompts using Meta's SAM 3.",
+    },
   ];
 </script>
 
