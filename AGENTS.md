@@ -68,4 +68,6 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 - Always use the virtual environment located at `./.venv`.
 - Run scripts using `.venv/bin/python` to ensure dependencies are loaded.
-- Generated artifacts (e.g. image, video, pdf) should be written into ".artifacts" folder!! If folder does not exist, create it first.
+- Any downloaded files (e.g. model weights, data) from internet should be placed in ".downloads"
+- The generated artifacts (e.g. image, video, pdf) from codex should be written into ".artifacts" folder!! If folder does not exist, create it first. 
+- When channels like Telegram exists, you should only send back artifacts to user when they explicitly request it.
