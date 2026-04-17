@@ -1,4 +1,6 @@
 .codex
+.download
+.artifacts
 node_modules/
 build/
 dist/
