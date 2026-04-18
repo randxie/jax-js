@@ -12,9 +12,9 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - `Qwen/FunASR prompt tokenization parity`: done
 - `FunASR source_ids / fbank_beg / fake_token_len preparation in JS`: done
 - `Qwen weight export for JS runtime`: done
-- `Qwen decoder implementation in JS`: in progress
+- `Qwen decoder implementation in JS`: done for sample-audio greedy decode
 - `browser-side WebGPU FunASR harness`: done
-- `end-to-end transcript generation in jax-js`: in progress
+- `end-to-end transcript generation in jax-js`: done for the shipped sample
 - `VAD / long-audio segmentation`: not started
 - `timestamps`: not started
 
@@ -33,6 +33,7 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - Qwen runtime implementation exists in `scripts/funasr_nano_qwen.ts`.
 - End-to-end runner exists in `scripts/verify_funasr_nano_e2e.ts`.
 - Browser-side WebGPU route exists in `website/src/routes/funasr-nano/+page.svelte`.
+- Browser-side Playwright/WebGPU e2e verification now exists against `/funasr-nano`.
 
 ## Latest Verification
 
@@ -64,6 +65,18 @@ Ran on the local assets already present in `.download/`:
 - `npx pnpm --dir website build`
   - result: website build succeeds with the new `/funasr-nano` route
   - note: build emits pre-existing SvelteKit/Svelte warnings but exits successfully
+- Browser-side e2e on `http://127.0.0.1:4175/funasr-nano`
+  - runner: Playwright + local Chrome under `xvfb-run`
+  - required Chrome flags in this environment:
+    - `--enable-unsafe-webgpu`
+    - `--enable-features=Vulkan`
+    - `--use-angle=vulkan`
+    - `--no-sandbox`
+    - `--js-flags=--js-float16array`
+  - result: transcript matches expected sample text
+  - result: generated ids match Python greedy reference:
+    `[29767, 99938, 20450, 105083, 99609, 27442, 56137, 102172, 75108, 27442, 1773, 151645]`
+  - result: transcript is `开饭时间早上九点至下午五点。`
 
 ## Main Findings
 
@@ -102,11 +115,9 @@ Ran on the local assets already present in `.download/`:
    - audio embedding splice in JS
    - Qwen greedy decode implementation in JS
 
-8. The remaining blocker is runtime feasibility, not missing wiring.
-   Current attempts hit one or more of:
-   - wasm `float16` op gaps
-   - wasm allocator limits for larger `float32` loads
-   - CPU-backend runtime that is too slow for practical end-to-end completion
+8. The main sample-audio runtime blocker is cleared on browser WebGPU.
+   The sample now runs end-to-end in `jax-js` when launched in a Chrome/WebGPU setup
+   that exposes the needed features in this environment.
 
 9. Python greedy reference for the sample is now pinned:
    - generated token ids:
@@ -120,18 +131,19 @@ Ran on the local assets already present in `.download/`:
    - accepts local exported FunASR artifacts
    - runs frontend + encoder/adaptor + Qwen decode in-browser
 
-11. The browser-side WebGPU route is staged but not transcript-verified in this shell environment.
-   This environment does not expose `navigator.gpu`, so verification here is limited to a successful website build.
+11. The browser-side WebGPU route is now transcript-verified in this shell environment
+   via Playwright + local Chrome + `xvfb-run`.
+   The verified output matches the Python reference transcript exactly.
 
 ## Distance To FunASR-nano Support
 
-Assessment: `not close yet` for full end-to-end support, but `good progress` on the audio side.
+Assessment: `close for the shipped sample-audio milestone`, but still incomplete for broader FunASR support.
 
 Roughly:
 
 - audio preprocessing: mostly there
 - acoustic encoder/adaptor path: mostly there
-- text decoding path: missing
+- text decoding path: working for the shipped sample on browser WebGPU
 - production features like VAD and timestamps: missing
 
 If the success bar is "match the sample transcript inside jax-js", the remaining work is dominated by the LLM side.
@@ -143,30 +155,30 @@ If the success bar is "match the sample transcript inside jax-js", the remaining
   - a narrower milestone of `frontend + encoder/adaptor` support only
 - [ ] Confirm whether we want to support the released `Fun-ASR-Nano-2512` checkpoint specifically
   - This matters because the released checkpoint does not provide a usable CTC path.
-- [ ] Add a `jax-js` inference path for the Qwen decoder stack used by `FunASR-nano`
+- [x] Add a `jax-js` inference path for the Qwen decoder stack used by `FunASR-nano`
 - [x] Load the tokenizer and special tokens used by the prompt/chat template
 - [x] Recreate the prompt/chat template text used by FunASR inference
 - [x] Recreate prompt-side fake audio token insertion metadata
 - [x] Recreate `inputs_embeds` injection for audio tokens
 - [x] Implement autoregressive generation and stopping rules
 - [x] Add a browser-side `webgpu` execution path
-- [ ] Verify that the browser-side `webgpu` path reproduces the sample transcript
-- [ ] Add a verified end-to-end parity test against the sample audio transcript
+- [x] Verify that the browser-side `webgpu` path reproduces the sample transcript
+- [x] Add a verified end-to-end parity test against the sample audio transcript
 
 ## Shortest Practical Path
 
 1. Freeze the current milestone as:
-   `FunASR-nano audio frontend + encoder/adaptor parity`
+   `FunASR-nano sample-audio transcription in browser WebGPU`
 
 2. Decide whether to continue with:
    - `FunASR-nano` as-is, which requires the Qwen generation path
    - another FunASR model that has a simpler decode path and is easier to bring up in `jax-js`
 
 3. If staying with `FunASR-nano`, next implementation work should be:
-   - export or load Qwen weights in a format usable from `jax-js`
-   - export the Qwen token embedding table or otherwise load it in JS
-   - use the new browser-side `webgpu` route to validate the decode path
-   - then verify on the shipped sample audio
+   - remove environment-specific launch assumptions from automated verification
+   - harden the browser path beyond the shipped sample assets
+   - add raw audio upload / decode in-browser instead of relying on exported sample JSON
+   - then extend toward longer-audio features like VAD and timestamps
 
 ## Suggested Next Milestone
 
@@ -179,6 +191,8 @@ Definition of done:
 - runs encoder/adaptor in `jax-js`
 - runs the Qwen decode path in `jax-js`
 - returns `开饭时间早上九点至下午五点。`
+
+Status: done on the browser-side WebGPU path.
 
 ## Notes
 

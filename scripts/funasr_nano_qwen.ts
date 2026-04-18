@@ -29,7 +29,7 @@ type QwenLayer = {
 
 export type FunASRNanoQwen = {
   embedTokens: np.Array;
-  embedTokensData: Float16Array<ArrayBuffer>;
+  embedTokensData: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>;
   norm: RMSNorm;
   layers: QwenLayer[];
   hiddenSize: number;
@@ -51,17 +51,74 @@ type QwenDecodeState = {
   seqLen: number;
 };
 
+function f16BitsToFloat32(bits: number): number {
+  const sign = (bits & 0x8000) ? -1 : 1;
+  const exponent = (bits >> 10) & 0x1f;
+  const fraction = bits & 0x03ff;
+  if (exponent === 0) {
+    if (fraction === 0) return sign * 0;
+    return sign * 2 ** -14 * (fraction / 1024);
+  }
+  if (exponent === 0x1f) {
+    return fraction === 0 ? sign * Infinity : NaN;
+  }
+  return sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
+}
+
+function f16DataToFloat32(
+  data: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
+): Float32Array<ArrayBuffer> {
+  if (typeof Float16Array !== "undefined" && data instanceof Float16Array) {
+    return Float32Array.from(data);
+  }
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    out[i] = f16BitsToFloat32(data[i]);
+  }
+  return out;
+}
+
 function tensorToArray(tensor: st.Tensor): np.Array {
   if (tensor.dtype !== "F16") {
     throw new Error(`Expected F16 safetensor, got ${tensor.dtype}`);
   }
-  return np.array(
-    Float32Array.from(tensor.data as Float16Array<ArrayBuffer>),
-    {
+  return np.array(f16DataToFloat32(
+    tensor.data as Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
+  ), {
     dtype: np.float32,
     shape: tensor.shape,
-    },
-  );
+  });
+}
+
+function gatherEmbeddingRows(
+  data: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
+  hiddenSize: number,
+  ids: number[],
+): Float32Array<ArrayBuffer> {
+  const out = new Float32Array(ids.length * hiddenSize);
+  for (let i = 0; i < ids.length; i++) {
+    const start = ids[i] * hiddenSize;
+    for (let j = 0; j < hiddenSize; j++) {
+      out[i * hiddenSize + j] = f16BitsToFloat32(data[start + j]);
+    }
+  }
+  return out;
+}
+
+function gatherEmbeddingRowsTyped(
+  data: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
+  hiddenSize: number,
+  ids: number[],
+): Float32Array<ArrayBuffer> {
+  if (typeof Float16Array !== "undefined" && data instanceof Float16Array) {
+    const out = new Float32Array(ids.length * hiddenSize);
+    for (let i = 0; i < ids.length; i++) {
+      const start = ids[i] * hiddenSize;
+      out.set(Float32Array.from(data.subarray(start, start + hiddenSize)), i * hiddenSize);
+    }
+    return out;
+  }
+  return gatherEmbeddingRows(data, hiddenSize, ids);
 }
 
 function runLinear({ weight }: Linear, x: np.Array): np.Array {
@@ -176,10 +233,9 @@ function runAttentionStep(
 
   const fullK = cache.key.size > 0 ? np.concatenate([cache.key.ref, k], 0) : k;
   const fullV = cache.value.size > 0 ? np.concatenate([cache.value.ref, v], 0) : v;
-  const repeatedK = repeatKV(fullK, model.numHeads / model.numKeyValueHeads);
-  const repeatedV = repeatKV(fullV, model.numHeads / model.numKeyValueHeads);
-
   const totalLen = fullK.shape[0];
+  const repeatedK = repeatKV(fullK.ref, model.numHeads / model.numKeyValueHeads);
+  const repeatedV = repeatKV(fullV.ref, model.numHeads / model.numKeyValueHeads);
   const maskDelta = np
     .arange(totalLen)
     .sub(np.arange(t).reshape([t, 1]))
@@ -227,20 +283,19 @@ function prefillFunASRNanoQwen(
   const caches: KVCache[] = [];
   for (const layer of model.layers) {
     const residual1 = hidden.ref;
-    hidden = runRMSNorm(layer.inputLayernorm, hidden, model.rmsNormEps);
-    hidden = residual1.add(runAttention(model, layer, hidden));
+    const attnInput = runRMSNorm(layer.inputLayernorm, hidden, model.rmsNormEps);
+    hidden = residual1.add(runAttention(model, layer, attnInput.ref));
 
     const residual2 = hidden.ref;
     hidden = runRMSNorm(layer.postAttentionLayernorm, hidden, model.rmsNormEps);
     hidden = residual2.add(runMLP(layer, hidden));
 
-    const normed = runRMSNorm(layer.inputLayernorm, residual1, model.rmsNormEps);
-    let k = runLinear(layer.selfAttn.kProj, normed).reshape([
+    let k = runLinear(layer.selfAttn.kProj, attnInput.ref).reshape([
       inputEmbeds.shape[0],
       model.numKeyValueHeads,
       model.headDim,
     ]).astype(np.float32);
-    let v = runLinear(layer.selfAttn.vProj, normed).reshape([
+    let v = runLinear(layer.selfAttn.vProj, attnInput).reshape([
       inputEmbeds.shape[0],
       model.numKeyValueHeads,
       model.headDim,
@@ -293,22 +348,9 @@ function decodeFunASRNanoQwenStep(
   };
 }
 
-function gatherEmbeddingRows(
-  data: Float16Array<ArrayBuffer>,
-  hiddenSize: number,
-  ids: number[],
-): Float16Array<ArrayBuffer> {
-  const out = new Float16Array(ids.length * hiddenSize);
-  for (let i = 0; i < ids.length; i++) {
-    const start = ids[i] * hiddenSize;
-    out.set(data.subarray(start, start + hiddenSize), i * hiddenSize);
-  }
-  return out;
-}
-
 export function embedTokenIds(model: FunASRNanoQwen, ids: number[]): np.Array {
-  return np.array(gatherEmbeddingRows(model.embedTokensData, model.hiddenSize, ids), {
-    dtype: np.float16,
+  return np.array(gatherEmbeddingRowsTyped(model.embedTokensData, model.hiddenSize, ids), {
+    dtype: np.float32,
     shape: [ids.length, model.hiddenSize],
   });
 }
@@ -320,8 +362,12 @@ export async function buildFunASRNanoInputEmbeds(
   fakeTokenLen: number,
   audioEmbeds: np.Array,
 ): Promise<np.Array> {
-  const data = gatherEmbeddingRows(model.embedTokensData, model.hiddenSize, sourceIds);
-  const audioData = await audioEmbeds.data();
+  const data = gatherEmbeddingRowsTyped(
+    model.embedTokensData,
+    model.hiddenSize,
+    sourceIds,
+  );
+  const audioData = await audioEmbeds.astype(np.float32).data();
   for (let i = 0; i < fakeTokenLen; i++) {
     const dst = (fbankBeg + i) * model.hiddenSize;
     const src = i * model.hiddenSize;
@@ -330,7 +376,7 @@ export async function buildFunASRNanoInputEmbeds(
     }
   }
   return np.array(data, {
-    dtype: np.float16,
+    dtype: np.float32,
     shape: [sourceIds.length, model.hiddenSize],
   });
 }
@@ -388,7 +434,9 @@ export function loadFunASRNanoQwenFromBuffers(
 
   return {
     embedTokens: nested.model.embed_tokens.weight,
-    embedTokensData: embedTensor.data as Float16Array<ArrayBuffer>,
+    embedTokensData: embedTensor.data as
+      | Float16Array<ArrayBuffer>
+      | Uint16Array<ArrayBuffer>,
     norm: { weight: nested.model.norm.weight },
     layers: nested.model.layers.map((layer: any) => ({
       inputLayernorm: { weight: layer.input_layernorm.weight },
