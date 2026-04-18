@@ -69,6 +69,16 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Always use the virtual environment located at `./.venv`.
 - Run scripts using `.venv/bin/python` to ensure dependencies are loaded.
 - Any file downloaded from the internet that is not meant to be sent back to the user must be placed in `.download`. Create the folder if it does not exist.
-- Only files that are meant to be sent back to the user as deliverables should be placed or symlinked into `.artifacts`. This includes generated outputs such as images, videos, and PDFs when the user explicitly asked for them.
+- Use `.artifacts/local/` for regular generated artifacts that are only for local inspection, debugging, or intermediate workflow state. Create folder if not exist.
+- Use `.artifacts/send/` only for artifacts that are explicitly intended to be sent back to the user or Telegram as deliverables. Create folder if not exist.
+- Not every artifact belongs in the send-back path. Most generated artifacts should stay local unless the user explicitly asked to receive them.
+- Never use `.artifacts/send/` to send back the whole repository, source trees, project folders, or bulk code exports. `.artifacts/send/` is only for small explicit deliverables.
+- Keep send-back artifacts as top-level files directly under `.artifacts/send/`. Do not place directories or nested trees there.
+- Send back at most 1 artifact per turn. If multiple local artifacts are generated, choose the single intended deliverable and keep the rest in `.artifacts/local/`.
 - Do not send downloaded files back to the user just because they exist locally.
-- Only send artifacts back to the user when the user explicitly requested generated output. If a file should be attached back to the user, make sure it is present in `.artifacts` first, then send it as an attachment.
+- Do not trigger the backward attachment path unless the user explicitly asked for a deliverable artifact to be sent back. Requests to make code changes, fix bugs, update UI, write docs for review, or inspect files are not permission to send attachments back.
+- Only send artifacts back to the user when the user explicitly requested generated output or explicitly asked to receive a file. If a file should be attached back to the user, make sure it is present in `.artifacts/send/` first, then send it as an attachment.
+
+## 6. Code Merging
+
+- When user asks you to upload the code, make sure you properly update .gitignore so you don't accidentally push artifacts that cause storage issues. After checking that, create a commit message based on the change, and push the change to main. Return proper error if you failed to push. Never do force push!!

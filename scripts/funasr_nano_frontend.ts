@@ -1,4 +1,4 @@
-import { numpy as np } from "../src/index.ts";
+import { numpy as np } from "../dist/index.js";
 
 type FrontendConfig = {
   fs: number;

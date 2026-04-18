@@ -328,6 +328,260 @@ export class BpeEncoding {
   }
 }
 
+type HuggingFaceAddedToken = {
+  id: number;
+  content: string;
+  special?: boolean;
+};
+
+type HuggingFaceTokenizerJSON = {
+  added_tokens?: HuggingFaceAddedToken[];
+  normalizer?: { type?: string };
+  pre_tokenizer?: {
+    type?: string;
+    pretokenizers?: Array<{
+      type?: string;
+      pattern?: { Regex?: string };
+    }>;
+  };
+  model?: {
+    type?: string;
+    vocab?: Record<string, number>;
+    merges?: Array<string | [string, string]>;
+  };
+};
+
+const byteLevelMaps = (() => {
+  const bs: number[] = [];
+  for (let i = 33; i <= 126; i++) bs.push(i);
+  for (let i = 161; i <= 172; i++) bs.push(i);
+  for (let i = 174; i <= 255; i++) bs.push(i);
+
+  const cs = [...bs];
+  let n = 0;
+  for (let b = 0; b < 256; b++) {
+    if (!bs.includes(b)) {
+      bs.push(b);
+      cs.push(256 + n);
+      n++;
+    }
+  }
+
+  const byteToChar = new Map<number, string>();
+  const charToByte = new Map<string, number>();
+  for (let i = 0; i < bs.length; i++) {
+    const char = String.fromCharCode(cs[i]);
+    byteToChar.set(bs[i], char);
+    charToByte.set(char, bs[i]);
+  }
+  return { byteToChar, charToByte };
+})();
+
+function encodeByteLevel(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let out = "";
+  for (const b of bytes) {
+    out += byteLevelMaps.byteToChar.get(b)!;
+  }
+  return out;
+}
+
+function decodeByteLevel(text: string): string {
+  const bytes = new Uint8Array([...text].map((c) => byteLevelMaps.charToByte.get(c)!));
+  return new TextDecoder().decode(bytes);
+}
+
+function compileHuggingFaceRegex(pattern: string): RegExp {
+  pattern = pattern.replace(
+    "(?i:'s|'t|'re|'ve|'m|'ll|'d)",
+    "'(?:[sS]|[tT]|[rR][eE]|[vV][eE]|[mM]|[lL][lL]|[dD])",
+  );
+  return new RegExp(pattern, "gu");
+}
+
+function bytePairEncodeHuggingFace(
+  piece: string,
+  encoder: Map<string, number>,
+  mergeRanks: Map<string, number>,
+): number[] {
+  let parts = [...piece];
+  while (parts.length > 1) {
+    let minRank = Number.POSITIVE_INFINITY;
+    let minIndex = -1;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const rank = mergeRanks.get(`${parts[i]} ${parts[i + 1]}`);
+      if (rank !== undefined && rank < minRank) {
+        minRank = rank;
+        minIndex = i;
+      }
+    }
+    if (minIndex < 0) break;
+    parts = [
+      ...parts.slice(0, minIndex),
+      parts[minIndex] + parts[minIndex + 1],
+      ...parts.slice(minIndex + 2),
+    ];
+  }
+  return parts.map((part) => {
+    const token = encoder.get(part);
+    if (token === undefined) {
+      throw new Error(`Unknown Hugging Face BPE token: ${JSON.stringify(part)}`);
+    }
+    return token;
+  });
+}
+
+export class HuggingFaceBPE {
+  encoder: Map<string, number>;
+  decoder: Map<number, string>;
+  mergeRanks: Map<string, number>;
+  specialTokensEncoder: Map<string, number>;
+  specialTokensDecoder: Map<number, string>;
+  regex: RegExp;
+  normalizeNfc: boolean;
+
+  constructor(
+    encoder: Map<string, number>,
+    mergeRanks: Map<string, number>,
+    specialTokens: Record<string, number>,
+    regex: RegExp,
+    normalizeNfc: boolean,
+  ) {
+    this.encoder = encoder;
+    this.decoder = new Map(
+      [...encoder.entries()].map(([piece, token]) => [token, piece]),
+    );
+    this.mergeRanks = mergeRanks;
+    this.specialTokensEncoder = new Map(Object.entries(specialTokens));
+    this.specialTokensDecoder = new Map(
+      Object.entries(specialTokens).map(([piece, token]) => [token, piece]),
+    );
+    this.regex = regex;
+    this.normalizeNfc = normalizeNfc;
+  }
+
+  static fromJSON(json: HuggingFaceTokenizerJSON): HuggingFaceBPE {
+    if (json.model?.type !== "BPE" || !json.model.vocab || !json.model.merges) {
+      throw new Error("Unsupported Hugging Face tokenizer model");
+    }
+
+    const split = json.pre_tokenizer?.pretokenizers?.find(
+      (item) => item.type === "Split",
+    );
+    const pattern = split?.pattern?.Regex;
+    if (!pattern) {
+      throw new Error("Unsupported Hugging Face tokenizer pre-tokenizer");
+    }
+
+    const mergeRanks = new Map<string, number>();
+    for (const [i, pair] of json.model.merges.entries()) {
+      mergeRanks.set(Array.isArray(pair) ? pair.join(" ") : pair, i);
+    }
+
+    const specialTokens: Record<string, number> = {};
+    for (const token of json.added_tokens ?? []) {
+      if (token.special) specialTokens[token.content] = token.id;
+    }
+
+    return new HuggingFaceBPE(
+      new Map(Object.entries(json.model.vocab)),
+      mergeRanks,
+      specialTokens,
+      compileHuggingFaceRegex(pattern),
+      json.normalizer?.type === "NFC",
+    );
+  }
+
+  static fromBinary(data: Uint8Array): HuggingFaceBPE {
+    return HuggingFaceBPE.fromJSON(
+      JSON.parse(new TextDecoder().decode(data)) as HuggingFaceTokenizerJSON,
+    );
+  }
+
+  encode(text: string, allowedSpecial?: Set<string>): number[] {
+    if (this.normalizeNfc) text = text.normalize("NFC");
+
+    const ret: number[] = [];
+    let start = 0;
+    const specials = [...this.specialTokensEncoder.keys()]
+      .sort((a, b) => b.length - a.length)
+      .map(_escapeRegex)
+      .join("|");
+    const specialRegex = specials ? new RegExp(specials, "g") : null;
+
+    while (true) {
+      let nextSpecial: RegExpExecArray | null = null;
+      if (specialRegex) {
+        specialRegex.lastIndex = start;
+        while (true) {
+          nextSpecial = specialRegex.exec(text);
+          if (nextSpecial === null) break;
+          if (allowedSpecial?.has(nextSpecial[0])) break;
+          specialRegex.lastIndex = nextSpecial.index + 1;
+        }
+      }
+      const end = nextSpecial ? nextSpecial.index : text.length;
+      for (const mat of text.slice(start, end).matchAll(this.regex)) {
+        const piece = encodeByteLevel(mat[0]);
+        const token = this.encoder.get(piece);
+        if (token !== undefined) ret.push(token);
+        else ret.push(...bytePairEncodeHuggingFace(piece, this.encoder, this.mergeRanks));
+      }
+
+      if (nextSpecial !== null) {
+        ret.push(this.specialTokensEncoder.get(nextSpecial[0])!);
+        start = nextSpecial.index + nextSpecial[0].length;
+      } else {
+        break;
+      }
+    }
+
+    return ret;
+  }
+
+  specialTokens(): Set<string> {
+    return new Set(this.specialTokensEncoder.keys());
+  }
+
+  encodeWithSpecialTokens(text: string): number[] {
+    return this.encode(text, this.specialTokens());
+  }
+
+  decode(tokens: number[]): string {
+    let raw = "";
+    let decoded = "";
+
+    const flush = () => {
+      if (!raw) return;
+      decoded += decodeByteLevel(raw);
+      raw = "";
+    };
+
+    for (const token of tokens) {
+      const special = this.specialTokensDecoder.get(token);
+      if (special !== undefined) {
+        flush();
+        decoded += special;
+        continue;
+      }
+      const piece = this.decoder.get(token);
+      if (piece === undefined) {
+        throw new Error(`Unknown token during decode: ${token}`);
+      }
+      raw += piece;
+    }
+    flush();
+    return decoded;
+  }
+}
+
+export async function loadHuggingFaceBpe(
+  url: string | URL,
+): Promise<HuggingFaceBPE> {
+  const data = await cachedFetch(url);
+  return HuggingFaceBPE.fromBinary(data);
+}
+
 /** BPE encoding with modifications for OpenAI CLIP models. */
 class ClipEncoding extends BpeEncoding {
   static readonly pattern =
