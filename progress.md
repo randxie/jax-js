@@ -15,6 +15,7 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - `Qwen decoder implementation in JS`: done for sample-audio greedy decode
 - `browser-side WebGPU FunASR harness`: done
 - `end-to-end transcript generation in jax-js`: done for the shipped sample
+- `browser-side microphone recording`: done
 - `VAD / long-audio segmentation`: not started
 - `timestamps`: not started
 
@@ -34,6 +35,7 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - End-to-end runner exists in `scripts/verify_funasr_nano_e2e.ts`.
 - Browser-side WebGPU route exists in `website/src/routes/funasr-nano/+page.svelte`.
 - Browser-side Playwright/WebGPU e2e verification now exists against `/funasr-nano`.
+- Browser-side microphone capture now exists in `/funasr-nano`.
 
 ## Latest Verification
 
@@ -77,6 +79,13 @@ Ran on the local assets already present in `.download/`:
   - result: generated ids match Python greedy reference:
     `[29767, 99938, 20450, 105083, 99609, 27442, 56137, 102172, 75108, 27442, 1773, 151645]`
   - result: transcript is `开饭时间早上九点至下午五点。`
+- Browser-side microphone recording e2e on `http://127.0.0.1:4175/funasr-nano`
+  - runner: Playwright + local Chrome fake microphone capture under `xvfb-run`
+  - fake microphone source: `.artifacts/local/funasr_nano_zh.wav`
+  - result: recorded `microphone.webm` runs end-to-end successfully
+  - result: transcript matches expected sample text exactly
+  - result: generated ids match Python greedy reference
+  - note: the route trims silence and normalizes to the current exported encoder frame window
 
 ## Main Findings
 
@@ -134,6 +143,11 @@ Ran on the local assets already present in `.download/`:
 11. The browser-side WebGPU route is now transcript-verified in this shell environment
    via Playwright + local Chrome + `xvfb-run`.
    The verified output matches the Python reference transcript exactly.
+   Direct browser microphone recording is now supported as well.
+
+12. The current exported encoder artifact is still tied to the sample-sized frame window.
+   Browser microphone recordings are trimmed for silence and normalized to the
+   current `94`-frame encoder input window so the staged browser path remains usable.
 
 ## Distance To FunASR-nano Support
 
@@ -145,6 +159,7 @@ Roughly:
 - acoustic encoder/adaptor path: mostly there
 - text decoding path: working for the shipped sample on browser WebGPU
 - production features like VAD and timestamps: missing
+- browser-side microphone input: working for the current exported encoder window
 
 If the success bar is "match the sample transcript inside jax-js", the remaining work is dominated by the LLM side.
 
@@ -177,7 +192,7 @@ If the success bar is "match the sample transcript inside jax-js", the remaining
 3. If staying with `FunASR-nano`, next implementation work should be:
    - remove environment-specific launch assumptions from automated verification
    - harden the browser path beyond the shipped sample assets
-   - add raw audio upload / decode in-browser instead of relying on exported sample JSON
+   - remove the current fixed-window assumption from the exported encoder path
    - then extend toward longer-audio features like VAD and timestamps
 
 ## Suggested Next Milestone
