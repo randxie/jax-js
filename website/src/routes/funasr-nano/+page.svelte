@@ -77,6 +77,8 @@
   let recordingState = $state<"idle" | "recording" | "ready">("idle");
   let recordedAudio = $state<File | null>(null);
   let recordedAudioUrl = $state<string | null>(null);
+  let audioInputDevices = $state<MediaDeviceInfo[]>([]);
+  let selectedInputDeviceId = $state<string>("");
   let inputDeviceLabel = $state<string | null>(null);
   let inputDeviceId = $state<string | null>(null);
   let outputDeviceLabel = $state<string | null>(null);
@@ -115,6 +117,19 @@
     const firstOutput = devices.find((device) => device.kind === "audiooutput");
     outputDeviceLabel =
       defaultOutput?.label || firstOutput?.label || "System default audio output";
+  }
+
+  async function refreshAudioInputDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      audioInputDevices = [];
+      return;
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((device) => device.kind === "audioinput");
+    audioInputDevices = inputs;
+    if (!selectedInputDeviceId && inputs.length > 0) {
+      selectedInputDeviceId = inputs[0].deviceId;
+    }
   }
 
   function getEncoderOutputName(outputNames: string[]): string {
@@ -338,12 +353,16 @@
 
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          ...(selectedInputDeviceId
+            ? { deviceId: { exact: selectedInputDeviceId } }
+            : {}),
           channelCount: 1,
           noiseSuppression: false,
           echoCancellation: false,
           autoGainControl: false,
         },
       });
+      await refreshAudioInputDevices();
       const track = mediaStream.getAudioTracks()[0];
       inputDeviceLabel = track?.label || "Unnamed microphone";
       inputDeviceId = track?.getSettings().deviceId || null;
@@ -481,7 +500,15 @@
 
   onMount(() => {
     refreshArtifactCache();
+    refreshAudioInputDevices();
     refreshAudioOutputLabel();
+    navigator.mediaDevices?.addEventListener?.("devicechange", refreshAudioInputDevices);
+    navigator.mediaDevices?.addEventListener?.("devicechange", refreshAudioOutputLabel);
+  });
+
+  onDestroy(() => {
+    navigator.mediaDevices?.removeEventListener?.("devicechange", refreshAudioInputDevices);
+    navigator.mediaDevices?.removeEventListener?.("devicechange", refreshAudioOutputLabel);
   });
 </script>
 
@@ -571,6 +598,24 @@
             <MicIcon size={16} />
             Microphone Recording
           </div>
+          <label class="mb-4 block">
+            <span class="mb-2 block text-sm text-stone-600">Input device</span>
+            <select
+              class="block w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 disabled:bg-stone-100"
+              bind:value={selectedInputDeviceId}
+              disabled={recordingState === "recording" || audioInputDevices.length === 0}
+            >
+              {#if audioInputDevices.length === 0}
+                <option value="">No microphone devices detected yet</option>
+              {:else}
+                {#each audioInputDevices as device}
+                  <option value={device.deviceId}>
+                    {device.label || `Microphone ${device.deviceId.slice(0, 8)}`}
+                  </option>
+                {/each}
+              {/if}
+            </select>
+          </label>
           <div class="flex flex-wrap items-center gap-3">
             <button
               class="inline-flex items-center gap-2 rounded-full bg-lime-700 px-5 py-3 text-sm font-medium text-white transition hover:bg-lime-800 disabled:cursor-not-allowed disabled:bg-stone-400"
