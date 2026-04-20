@@ -39,8 +39,10 @@
     generationConfig: "Qwen generation_config.json",
   };
   const defaultArtifactUrls: Record<ArtifactKey, string> = {
-    encoder: "/models/funasr/funasr_nano_encoder.onnx",
-    llm: "/models/funasr/funasr_nano_llm_fp16.safetensors",
+    encoder:
+      "https://huggingface.co/yuekai/Fun-ASR-Nano-2512-Encoder-ONNX-FP32/resolve/main/model.onnx",
+    llm:
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/model.safetensors",
     tokenizer:
       "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/tokenizer.json",
     config:
