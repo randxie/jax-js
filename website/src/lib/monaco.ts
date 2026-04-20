@@ -1,6 +1,6 @@
-import jaxTypesSrc from "@jax-js/jax/dist/index.d.ts?raw";
-import loadersTypesSrc from "@jax-js/loaders/dist/index.d.ts?raw";
-import optaxTypesSrc from "@jax-js/optax/dist/index.d.ts?raw";
+import jaxTypesSrc from "../../../dist/index.d.ts?raw";
+import loadersTypesSrc from "../../../packages/loaders/dist/index.d.ts?raw";
+import optaxTypesSrc from "../../../packages/optax/dist/index.d.ts?raw";
 import * as monaco from "monaco-editor";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 // import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
