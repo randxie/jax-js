@@ -17,6 +17,7 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - `end-to-end transcript generation in jax-js`: done for the shipped sample
 - `browser-side microphone recording`: done
 - `browser-side artifact download + local cache`: done
+- `browser-side hosted encoder compatibility + visible mic/output device reporting`: done
 - `VAD / long-audio segmentation`: not started
 - `timestamps`: not started
 

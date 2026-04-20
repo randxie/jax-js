@@ -77,6 +77,9 @@
   let recordingState = $state<"idle" | "recording" | "ready">("idle");
   let recordedAudio = $state<File | null>(null);
   let recordedAudioUrl = $state<string | null>(null);
+  let inputDeviceLabel = $state<string | null>(null);
+  let inputDeviceId = $state<string | null>(null);
+  let outputDeviceLabel = $state<string | null>(null);
   const webgpuAvailable = $derived(typeof navigator !== "undefined" && !!navigator.gpu);
   let mediaStream: MediaStream | null = null;
   let mediaRecorder: MediaRecorder | null = null;
@@ -98,6 +101,67 @@
     if (recordingState !== "recording") {
       recordingState = "idle";
     }
+  }
+
+  async function refreshAudioOutputLabel() {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      outputDeviceLabel = "System default audio output";
+      return;
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const defaultOutput = devices.find(
+      (device) => device.kind === "audiooutput" && device.deviceId === "default",
+    );
+    const firstOutput = devices.find((device) => device.kind === "audiooutput");
+    outputDeviceLabel =
+      defaultOutput?.label || firstOutput?.label || "System default audio output";
+  }
+
+  function getEncoderOutputName(outputNames: string[]): string {
+    return outputNames.find((name) => name === "encoder_out") || outputNames[0] || "";
+  }
+
+  function runEncoderCompat(
+    encoder: ONNXModel,
+    speech: Float32Array,
+    shape: [number, number, number],
+    speechLengths: np.Array,
+  ) {
+    const inputNames = encoder.model.graph?.input.map((value) => value.name) ?? [];
+    const outputNames = encoder.model.graph?.output.map((value) => value.name) ?? [];
+    const speechArray = np.array(speech, { shape });
+    const encoderOutputName = getEncoderOutputName(outputNames);
+
+    if (!encoderOutputName) {
+      throw new Error("Encoder model does not expose any outputs");
+    }
+
+    if (inputNames.includes("speech")) {
+      const out = encoder.run({
+        speech: speechArray,
+        ...(inputNames.includes("speech_lengths") ? { speech_lengths: speechLengths } : {}),
+      });
+      return {
+        encoderOut: out[encoderOutputName],
+        inputNames,
+        outputNames,
+      };
+    }
+
+    if (inputNames.includes("x")) {
+      const out = encoder.run({
+        x: speechArray,
+        ...(inputNames.includes("x_length") ? { x_length: speechLengths } : {}),
+        ...(inputNames.includes("speech_lengths") ? { speech_lengths: speechLengths } : {}),
+      });
+      return {
+        encoderOut: out[encoderOutputName],
+        inputNames,
+        outputNames,
+      };
+    }
+
+    throw new Error(`Unsupported encoder inputs: ${inputNames.join(", ") || "(none)"}`);
   }
 
   function stopMediaStream() {
@@ -280,6 +344,10 @@
           autoGainControl: false,
         },
       });
+      const track = mediaStream.getAudioTracks()[0];
+      inputDeviceLabel = track?.label || "Unnamed microphone";
+      inputDeviceId = track?.getSettings().deviceId || null;
+      await refreshAudioOutputLabel();
       mediaRecorder = mimeType
         ? new MediaRecorder(mediaStream, { mimeType })
         : new MediaRecorder(mediaStream);
@@ -358,10 +426,11 @@
         dtype: np.int32,
         shape: [1],
       });
-      const encoderOut = encoder.run({
-        speech: np.array(speech, { shape }),
-        speech_lengths: speechLengths,
-      }).encoder_out;
+      const {
+        encoderOut,
+        inputNames: encoderInputNames,
+        outputNames: encoderOutputNames,
+      } = runEncoderCompat(encoder, speech, shape, speechLengths);
 
       const tokenizer = tokenizers.HuggingFaceBPE.fromBinary(
         await readArtifact("tokenizer"),
@@ -394,6 +463,11 @@
         decoded_waveform_length: decodedWaveform.length,
         waveform_length: waveform.length,
         audio_file: recordedAudio.name,
+        input_device_label: inputDeviceLabel,
+        input_device_id: inputDeviceId,
+        output_device_label: outputDeviceLabel,
+        encoder_inputs: encoderInputNames,
+        encoder_outputs: encoderOutputNames,
         fbank_beg: prepared.fbankBeg,
         fake_token_len: prepared.fakeTokenLen,
       };
@@ -407,6 +481,7 @@
 
   onMount(() => {
     refreshArtifactCache();
+    refreshAudioOutputLabel();
   });
 </script>
 
@@ -524,6 +599,14 @@
                 Record a short utterance before running FunASR.
               </p>
             {/if}
+          </div>
+          <div class="mt-4 grid gap-2 text-sm text-stone-600">
+            <p>
+              Input device: {inputDeviceLabel || "No microphone selected yet"}
+            </p>
+            <p>
+              Output device: {outputDeviceLabel || "System default audio output"}
+            </p>
           </div>
           {#if recordedAudioUrl}
             <audio class="mt-4 w-full" controls src={recordedAudioUrl}></audio>
