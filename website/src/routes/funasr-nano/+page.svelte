@@ -71,6 +71,7 @@
   let transcript = $state<string>("");
   let generatedIds = $state<number[]>([]);
   let runMeta = $state<Record<string, unknown> | null>(null);
+  let artifactDiagnostics = $state<Record<string, unknown> | null>(null);
   let maxNewTokens = $state(16);
   let artifactsReady = $state(false);
   let isPreparingArtifacts = $state(false);
@@ -238,6 +239,26 @@
           await downloadManager.fetch(fileLabels[key], url);
         }
       }
+      await refreshArtifactCache();
+    } catch (error) {
+      status = "error";
+      errorMessage = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      isPreparingArtifacts = false;
+    }
+  }
+
+  async function resetArtifacts() {
+    isPreparingArtifacts = true;
+    errorMessage = null;
+    try {
+      for (const key of Object.keys(fileLabels) as ArtifactKey[]) {
+        const url = artifactUrls[key].trim();
+        if (!url) continue;
+        await opfs.remove(url);
+      }
+      artifactDiagnostics = null;
       await refreshArtifactCache();
     } catch (error) {
       status = "error";
@@ -421,6 +442,7 @@
     transcript = "";
     generatedIds = [];
     runMeta = null;
+    artifactDiagnostics = null;
 
     try {
       const devices = await init("webgpu");
@@ -441,7 +463,9 @@
         encoderFrames,
       );
 
-      const encoder = new ONNXModel(await readArtifact("encoder"));
+      const encoderBytes = await readArtifact("encoder");
+      const encoder = new ONNXModel(encoderBytes);
+      const encoderOps = [...new Set(encoder.model.graph?.node.map((node) => node.opType) ?? [])];
       const speechLengths = np.array(new Int32Array([encoderFrames]), {
         dtype: np.int32,
         shape: [1],
@@ -456,6 +480,15 @@
           "The selected encoder artifact does not include the FunASR adaptor. Use an encoder_adaptor.onnx artifact with output width 1024.",
         );
       }
+      artifactDiagnostics = {
+        encoder_url: artifactUrls.encoder,
+        encoder_cached: artifactCache.encoder?.cached ?? false,
+        encoder_size_mb: Math.round((artifactCache.encoder?.size ?? encoderBytes.byteLength) / 1024 / 1024),
+        encoder_inputs: encoderInputNames,
+        encoder_outputs: encoderOutputNames,
+        encoder_ops: encoderOps,
+        encoder_output_shape: encoderOut.shape,
+      };
 
       const tokenizer = tokenizers.HuggingFaceBPE.fromBinary(
         await readArtifact("tokenizer"),
@@ -572,6 +605,13 @@
             >
               <DownloadIcon size={16} />
               {isPreparingArtifacts ? "Preparing Cache…" : artifactsReady ? "Refresh Cache" : "Download Required Files"}
+            </button>
+            <button
+              class="inline-flex items-center gap-2 rounded-full border border-stone-300 bg-white px-5 py-3 text-sm font-medium text-stone-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400"
+              disabled={isPreparingArtifacts || status === "running"}
+              onclick={resetArtifacts}
+            >
+              Reset Cached Artifacts
             </button>
           </div>
 
@@ -740,6 +780,13 @@
             Run Metadata
           </p>
           <pre class="overflow-x-auto rounded-2xl bg-stone-100 p-4 text-sm leading-6 text-stone-700">{runMeta ? JSON.stringify(runMeta, null, 2) : "{}"}</pre>
+        </div>
+
+        <div class="rounded-[2rem] border border-stone-300/60 bg-white/90 p-6 shadow-[0_16px_50px_rgba(64,64,32,0.08)]">
+          <p class="mb-3 text-sm uppercase tracking-[0.22em] text-stone-500">
+            Artifact Diagnostics
+          </p>
+          <pre class="overflow-x-auto rounded-2xl bg-stone-100 p-4 text-sm leading-6 text-stone-700">{artifactDiagnostics ? JSON.stringify(artifactDiagnostics, null, 2) : "{}"}</pre>
         </div>
       </div>
     </div>
