@@ -258,6 +258,34 @@ test("should evaluate Reshape", async () => {
   expect(await result.Y.data()).toEqual(new Float32Array([1, 2, 3, 4, 5, 6]));
 });
 
+test("should infer Split num_outputs from node outputs", async () => {
+  const model = create(ModelProtoSchema, {
+    irVersion: 8n,
+    opsetImport: [create(OperatorSetIdProtoSchema, { version: 18n })],
+    graph: create(GraphProtoSchema, {
+      name: "split_infer_num_outputs_graph",
+      input: [floatTensorInfo("X", [4])],
+      output: [floatTensorInfo("Y1", [2]), floatTensorInfo("Y2", [2])],
+      node: [
+        create(NodeProtoSchema, {
+          opType: "Split",
+          input: ["X"],
+          output: ["Y1", "Y2"],
+        }),
+      ],
+    }),
+  });
+
+  const onnxModel = new ONNXModel(toBinary(ModelProtoSchema, model));
+  onTestFinished(() => onnxModel.dispose());
+
+  const x = np.array([1, 2, 3, 4]);
+  const result = onnxModel.run({ X: x });
+
+  expect(await result.Y1.data()).toEqual(new Float32Array([1, 2]));
+  expect(await result.Y2.data()).toEqual(new Float32Array([3, 4]));
+});
+
 test("should evaluate a chain: Add -> Relu -> MatMul", async () => {
   // Create: Y = Relu(A + B) @ C
   const model = create(ModelProtoSchema, {

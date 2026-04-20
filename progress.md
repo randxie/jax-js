@@ -19,6 +19,8 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - `browser-side artifact download + local cache`: done
 - `browser-side hosted encoder compatibility + visible mic/output device reporting`: done
 - `browser-side microphone input device selection`: done
+- `browser-side hosted encoder+adaptor default artifact`: done
+- `onnx Split num_outputs inference for hosted FunASR encoder+adaptor`: done
 - `VAD / long-audio segmentation`: not started
 - `timestamps`: not started
 

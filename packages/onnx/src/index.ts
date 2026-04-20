@@ -137,6 +137,14 @@ function parseAttributes(node: NodeProto): Record<string, any> {
       default:
     }
   }
+  if (
+    node.opType === "Split" &&
+    attrs.num_outputs === undefined &&
+    attrs.split === undefined &&
+    node.output.length > 0
+  ) {
+    attrs.num_outputs = node.output.length;
+  }
   return attrs;
 }
 

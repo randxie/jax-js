@@ -40,7 +40,7 @@
   };
   const defaultArtifactUrls: Record<ArtifactKey, string> = {
     encoder:
-      "https://huggingface.co/yuekai/Fun-ASR-Nano-2512-Encoder-ONNX-FP32/resolve/main/model.onnx",
+      "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-2025-12-30/resolve/main/encoder_adaptor.onnx",
     llm:
       "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/6a902ecfb2da967c517fdc0b5cad4ece88d22c18/Qwen3-0.6B/model.safetensors",
     tokenizer:
@@ -451,6 +451,11 @@
         inputNames: encoderInputNames,
         outputNames: encoderOutputNames,
       } = runEncoderCompat(encoder, speech, shape, speechLengths);
+      if (encoderOut.shape[encoderOut.shape.length - 1] !== 1024) {
+        throw new Error(
+          "The selected encoder artifact does not include the FunASR adaptor. Use an encoder_adaptor.onnx artifact with output width 1024.",
+        );
+      }
 
       const tokenizer = tokenizers.HuggingFaceBPE.fromBinary(
         await readArtifact("tokenizer"),
