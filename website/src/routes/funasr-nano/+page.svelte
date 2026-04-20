@@ -166,6 +166,7 @@
     if (inputNames.includes("x")) {
       const out = encoder.run({
         x: speechArray,
+        ...(inputNames.includes("input_lengths") ? { input_lengths: speechLengths } : {}),
         ...(inputNames.includes("x_length") ? { x_length: speechLengths } : {}),
         ...(inputNames.includes("speech_lengths") ? { speech_lengths: speechLengths } : {}),
       });
