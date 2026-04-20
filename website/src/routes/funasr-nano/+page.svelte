@@ -42,13 +42,13 @@
     encoder:
       "https://huggingface.co/yuekai/Fun-ASR-Nano-2512-Encoder-ONNX-FP32/resolve/main/model.onnx",
     llm:
-      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/model.safetensors",
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/6a902ecfb2da967c517fdc0b5cad4ece88d22c18/Qwen3-0.6B/model.safetensors",
     tokenizer:
-      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/tokenizer.json",
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/6a902ecfb2da967c517fdc0b5cad4ece88d22c18/Qwen3-0.6B/tokenizer.json",
     config:
-      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/config.json",
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/6a902ecfb2da967c517fdc0b5cad4ece88d22c18/Qwen3-0.6B/config.json",
     generationConfig:
-      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/generation_config.json",
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/6a902ecfb2da967c517fdc0b5cad4ece88d22c18/Qwen3-0.6B/generation_config.json",
   };
 
   const frontendConfig = {
