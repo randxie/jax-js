@@ -1,17 +1,19 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { defaultDevice, init, numpy as np } from "@jax-js/jax";
-  import { tokenizers } from "@jax-js/loaders";
+  import { cachedFetch, opfs, tokenizers } from "@jax-js/loaders";
   import { ONNXModel } from "@jax-js/onnx";
   import {
     AudioLinesIcon,
     CpuIcon,
+    DownloadIcon,
     FileUpIcon,
     MicIcon,
     SquareIcon,
     SparklesIcon,
   } from "@lucide/svelte";
 
+  import DownloadManager from "$lib/common/DownloadManager.svelte";
   import Seo from "$lib/common/Seo.svelte";
   import { extractFunASRNanoSpeech } from "../../../../scripts/funasr_nano_frontend";
   import { prepareFunASRNanoSourceIds } from "../../../../scripts/funasr_nano_prepare";
@@ -22,19 +24,29 @@
     loadFunASRNanoQwenFromBuffers,
   } from "../../../../scripts/funasr_nano_qwen";
 
-  type RequiredFileKey =
+  type ArtifactKey =
     | "encoder"
     | "llm"
     | "tokenizer"
     | "config"
     | "generationConfig";
 
-  const fileLabels: Record<RequiredFileKey, string> = {
+  const fileLabels: Record<ArtifactKey, string> = {
     encoder: "funasr_nano_encoder.onnx",
     llm: "funasr_nano_llm_fp16.safetensors",
     tokenizer: "Qwen tokenizer.json",
     config: "Qwen config.json",
     generationConfig: "Qwen generation_config.json",
+  };
+  const defaultArtifactUrls: Record<ArtifactKey, string> = {
+    encoder: "/models/funasr/funasr_nano_encoder.onnx",
+    llm: "/models/funasr/funasr_nano_llm_fp16.safetensors",
+    tokenizer:
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/tokenizer.json",
+    config:
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/config.json",
+    generationConfig:
+      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/resolve/main/Qwen3-0.6B/generation_config.json",
   };
 
   const frontendConfig = {
@@ -50,13 +62,16 @@
   const encoderFrames = 94;
   const encoderFeatureDim = frontendConfig.n_mels * frontendConfig.lfr_m;
 
-  let files = $state<Partial<Record<RequiredFileKey, File>>>({});
+  let artifactUrls = $state<Record<ArtifactKey, string>>({ ...defaultArtifactUrls });
+  let artifactCache = $state<Partial<Record<ArtifactKey, { cached: boolean; size: number }>>>({});
   let status = $state<"idle" | "running" | "done" | "error">("idle");
   let errorMessage = $state<string | null>(null);
   let transcript = $state<string>("");
   let generatedIds = $state<number[]>([]);
   let runMeta = $state<Record<string, unknown> | null>(null);
   let maxNewTokens = $state(16);
+  let artifactsReady = $state(false);
+  let isPreparingArtifacts = $state(false);
   let recordingState = $state<"idle" | "recording" | "ready">("idle");
   let recordedAudio = $state<File | null>(null);
   let recordedAudioUrl = $state<string | null>(null);
@@ -64,14 +79,11 @@
   let mediaStream: MediaStream | null = null;
   let mediaRecorder: MediaRecorder | null = null;
   let recordingChunks: Blob[] = [];
+  let downloadManager: DownloadManager;
 
-  function setFile(key: RequiredFileKey, fileList: FileList | null) {
-    files[key] = fileList?.[0];
-  }
-
-  function missingFiles(): string[] {
-    return (Object.keys(fileLabels) as RequiredFileKey[])
-      .filter((key) => !files[key])
+  function missingArtifactUrls(): string[] {
+    return (Object.keys(fileLabels) as ArtifactKey[])
+      .filter((key) => artifactUrls[key].trim() === "")
       .map((key) => fileLabels[key]);
   }
 
@@ -101,8 +113,57 @@
     }
   });
 
-  async function readBytes(file: File): Promise<Uint8Array<ArrayBuffer>> {
-    return new Uint8Array(await file.arrayBuffer());
+  async function refreshArtifactCache() {
+    const nextCache: Partial<Record<ArtifactKey, { cached: boolean; size: number }>> = {};
+    for (const key of Object.keys(fileLabels) as ArtifactKey[]) {
+      const url = artifactUrls[key].trim();
+      if (!url) continue;
+      const info = await opfs.info(url);
+      nextCache[key] = {
+        cached: info !== null,
+        size: info?.size ?? 0,
+      };
+    }
+    artifactCache = nextCache;
+    artifactsReady = (Object.keys(fileLabels) as ArtifactKey[]).every(
+      (key) => artifactUrls[key].trim() !== "" && nextCache[key]?.cached,
+    );
+  }
+
+  async function readArtifact(key: ArtifactKey): Promise<Uint8Array<ArrayBuffer>> {
+    const url = artifactUrls[key].trim();
+    if (!url) {
+      throw new Error(`Missing URL for ${fileLabels[key]}`);
+    }
+    return cachedFetch(url);
+  }
+
+  async function prepareArtifacts() {
+    const missing = missingArtifactUrls();
+    if (missing.length > 0) {
+      status = "error";
+      errorMessage = `Missing artifact URLs: ${missing.join(", ")}`;
+      return;
+    }
+
+    isPreparingArtifacts = true;
+    errorMessage = null;
+    try {
+      for (const key of Object.keys(fileLabels) as ArtifactKey[]) {
+        const url = artifactUrls[key].trim();
+        const cached = await opfs.info(url);
+        if (!cached) {
+          await downloadManager.fetch(fileLabels[key], url);
+        }
+      }
+      await refreshArtifactCache();
+    } catch (error) {
+      status = "error";
+      errorMessage = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      isPreparingArtifacts = false;
+    }
   }
 
   async function decodeBrowserAudio(
@@ -254,10 +315,9 @@
   }
 
   async function run() {
-    const missing = missingFiles();
-    if (missing.length > 0) {
+    if (!artifactsReady) {
       status = "error";
-      errorMessage = `Missing files: ${missing.join(", ")}`;
+      errorMessage = "Download the required artifacts before running FunASR";
       return;
     }
     if (!recordedAudio) {
@@ -291,7 +351,7 @@
         encoderFrames,
       );
 
-      const encoder = new ONNXModel(await readBytes(files.encoder!));
+      const encoder = new ONNXModel(await readArtifact("encoder"));
       const speechLengths = np.array(new Int32Array([encoderFrames]), {
         dtype: np.int32,
         shape: [1],
@@ -302,7 +362,7 @@
       }).encoder_out;
 
       const tokenizer = tokenizers.HuggingFaceBPE.fromBinary(
-        await readBytes(files.tokenizer!),
+        await readArtifact("tokenizer"),
       );
       const prepared = prepareFunASRNanoSourceIds(
         tokenizer,
@@ -311,9 +371,9 @@
       );
 
       const qwen = loadFunASRNanoQwenFromBuffers(
-        await readBytes(files.llm!),
-        await files.config!.text(),
-        await files.generationConfig!.text(),
+        await readArtifact("llm"),
+        new TextDecoder().decode(await readArtifact("config")),
+        new TextDecoder().decode(await readArtifact("generationConfig")),
       );
       const baseEmbeds = await buildFunASRNanoInputEmbeds(
         qwen,
@@ -342,6 +402,10 @@
       errorMessage = error instanceof Error ? error.message : String(error);
     }
   }
+
+  onMount(() => {
+    refreshArtifactCache();
+  });
 </script>
 
 <Seo
@@ -352,6 +416,8 @@
 <svelte:head>
   <title>FunASR Nano WebGPU Runner</title>
 </svelte:head>
+
+<DownloadManager bind:this={downloadManager} />
 
 <main class="min-h-screen bg-[radial-gradient(circle_at_top,#f4f0d6_0%,#f7f7f2_38%,#ecefe5_100%)] text-stone-900">
   <section class="mx-auto max-w-6xl px-6 py-10">
@@ -379,9 +445,49 @@
 
         <p class="mt-4 max-w-2xl text-sm leading-6 text-stone-500">
           Chrome microphone capture is the primary end-user path here. The model
-          artifacts still load from local files, but spoken input now comes from
-          direct browser recording instead of file upload.
+          artifacts now download into browser-local cache and are only fetched
+          when missing. Spoken input comes from direct browser recording.
         </p>
+
+        <div class="mt-8 rounded-[1.75rem] border border-stone-300 bg-stone-50/90 p-5">
+          <div class="mb-4 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2 text-sm font-medium text-stone-700">
+              <DownloadIcon size={16} />
+              Required Artifacts
+            </div>
+            <button
+              class="inline-flex items-center gap-2 rounded-full bg-stone-900 px-5 py-3 text-sm font-medium text-white transition hover:bg-lime-800 disabled:cursor-not-allowed disabled:bg-stone-400"
+              disabled={isPreparingArtifacts || status === "running"}
+              onclick={prepareArtifacts}
+            >
+              <DownloadIcon size={16} />
+              {isPreparingArtifacts ? "Preparing Cache…" : artifactsReady ? "Refresh Cache" : "Download Required Files"}
+            </button>
+          </div>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            {#each Object.entries(fileLabels) as [key, label]}
+              <label class="rounded-2xl border border-stone-300 bg-white p-4">
+                <div class="mb-2 flex items-center gap-2 text-sm font-medium text-stone-700">
+                  <FileUpIcon size={16} />
+                  {label}
+                </div>
+                <input
+                  class="block w-full rounded-xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm text-stone-700"
+                  bind:value={artifactUrls[key as ArtifactKey]}
+                  placeholder="Artifact URL"
+                />
+                {#if artifactCache[key as ArtifactKey]?.cached}
+                  <p class="mt-2 text-xs text-lime-700">
+                    Cached locally ({Math.round((artifactCache[key as ArtifactKey]?.size ?? 0) / 1024 / 1024)} MB)
+                  </p>
+                {:else}
+                  <p class="mt-2 text-xs text-stone-500">Not cached yet.</p>
+                {/if}
+              </label>
+            {/each}
+          </div>
+        </div>
 
         <div class="mt-8 rounded-[1.75rem] border border-stone-300 bg-stone-50/90 p-5">
           <div class="mb-3 flex items-center gap-2 text-sm font-medium text-stone-700">
@@ -422,28 +528,6 @@
           {/if}
         </div>
 
-        <div class="mt-8 grid gap-4 sm:grid-cols-2">
-          {#each Object.entries(fileLabels) as [key, label]}
-            <label class="rounded-2xl border border-stone-300 bg-stone-50/90 p-4 transition hover:border-lime-500 hover:bg-white">
-              <div class="mb-2 flex items-center gap-2 text-sm font-medium text-stone-700">
-                <FileUpIcon size={16} />
-                {label}
-              </div>
-              <input
-                class="block w-full text-sm text-stone-600 file:mr-3 file:rounded-full file:border-0 file:bg-lime-700 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-lime-800"
-                type="file"
-                onchange={(event) =>
-                  setFile(key as RequiredFileKey, (event.currentTarget as HTMLInputElement).files)}
-              />
-              {#if files[key as RequiredFileKey]}
-                <p class="mt-2 truncate text-xs text-stone-500">
-                  {files[key as RequiredFileKey]?.name}
-                </p>
-              {/if}
-            </label>
-          {/each}
-        </div>
-
         <div class="mt-6 flex flex-wrap items-end gap-4">
           <label class="flex flex-col gap-2 text-sm text-stone-600">
             Max new tokens
@@ -458,7 +542,7 @@
 
           <button
             class="inline-flex items-center gap-2 rounded-full bg-stone-900 px-6 py-3 font-medium text-white transition hover:bg-lime-800 disabled:cursor-not-allowed disabled:bg-stone-400"
-            disabled={status === "running" || !webgpuAvailable || recordingState === "recording" || !recordedAudio}
+            disabled={status === "running" || !webgpuAvailable || recordingState === "recording" || !recordedAudio || !artifactsReady || isPreparingArtifacts}
             onclick={run}
           >
             <SparklesIcon size={18} />
@@ -481,7 +565,7 @@
             </p>
           {:else if status === "idle"}
             <p class="text-sm leading-7 text-stone-300">
-              Load the model artifacts, record a clip, and run the browser-side WebGPU path.
+              Download the model artifacts once, record a clip, and run the browser-side WebGPU path.
             </p>
           {:else if status === "running"}
             <p class="text-sm leading-7 text-lime-200">

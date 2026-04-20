@@ -16,6 +16,7 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - `browser-side WebGPU FunASR harness`: done
 - `end-to-end transcript generation in jax-js`: done for the shipped sample
 - `browser-side microphone recording`: done
+- `browser-side artifact download + local cache`: done
 - `VAD / long-audio segmentation`: not started
 - `timestamps`: not started
 
@@ -36,6 +37,7 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - Browser-side WebGPU route exists in `website/src/routes/funasr-nano/+page.svelte`.
 - Browser-side Playwright/WebGPU e2e verification now exists against `/funasr-nano`.
 - Browser-side microphone capture now exists in `/funasr-nano`.
+- Browser-side artifact download and OPFS cache management now exists in `/funasr-nano`.
 
 ## Latest Verification
 
@@ -86,6 +88,10 @@ Ran on the local assets already present in `.download/`:
   - result: transcript matches expected sample text exactly
   - result: generated ids match Python greedy reference
   - note: the route trims silence and normalizes to the current exported encoder frame window
+- `website/src/routes/funasr-nano/+page.svelte`
+  - result: model artifacts can now be downloaded from URLs into browser-local OPFS cache
+  - result: cached artifacts are reused and only missing URLs are fetched
+  - note: default URLs assume the encoder and LLM artifacts are hosted at `/models/funasr/...`
 
 ## Main Findings
 
@@ -148,6 +154,12 @@ Ran on the local assets already present in `.download/`:
 12. The current exported encoder artifact is still tied to the sample-sized frame window.
    Browser microphone recordings are trimmed for silence and normalized to the
    current `94`-frame encoder input window so the staged browser path remains usable.
+
+13. The browser route no longer requires manual artifact upload.
+   It now supports:
+   - downloading required artifacts from configured URLs
+   - storing them in browser-local OPFS cache
+   - reusing cached files on later runs instead of downloading again
 
 ## Distance To FunASR-nano Support
 
