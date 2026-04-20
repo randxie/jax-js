@@ -13,7 +13,14 @@ export default defineConfig({
   ],
   optimizeDeps: {
     // https://github.com/vitejs/vite/issues/14609
-    exclude: ["@rollup/browser", "onnxruntime-web"],
+    exclude: [
+      "@rollup/browser",
+      "onnxruntime-web",
+      "@jax-js/jax",
+      "@jax-js/loaders",
+      "@jax-js/onnx",
+      "@jax-js/optax",
+    ],
   },
   build: {
     // Increase chunk size warning limit for ML libraries.

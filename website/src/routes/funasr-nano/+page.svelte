@@ -211,6 +211,19 @@
     artifactsReady = (Object.keys(fileLabels) as ArtifactKey[]).every(
       (key) => artifactUrls[key].trim() !== "" && nextCache[key]?.cached,
     );
+    artifactDiagnostics = {
+      ...(artifactDiagnostics ?? {}),
+      configured_urls: { ...artifactUrls },
+      cache: Object.fromEntries(
+        (Object.keys(fileLabels) as ArtifactKey[]).map((key) => [
+          key,
+          {
+            cached: nextCache[key]?.cached ?? false,
+            size_mb: Math.round((nextCache[key]?.size ?? 0) / 1024 / 1024),
+          },
+        ]),
+      ),
+    };
   }
 
   async function readArtifact(key: ArtifactKey): Promise<Uint8Array<ArrayBuffer>> {
@@ -246,6 +259,14 @@
       throw error;
     } finally {
       isPreparingArtifacts = false;
+    }
+  }
+
+  function validateEncoderUrl(url: string) {
+    if (url.includes("Fun-ASR-Nano-2512-Encoder-ONNX-FP32/resolve/main/model.onnx")) {
+      throw new Error(
+        "The configured encoder URL points to the raw 512-dim encoder. Use encoder_adaptor.onnx instead.",
+      );
     }
   }
 
@@ -445,6 +466,7 @@
     artifactDiagnostics = null;
 
     try {
+      validateEncoderUrl(artifactUrls.encoder);
       const devices = await init("webgpu");
       if (!devices.includes("webgpu")) {
         throw new Error("WebGPU backend is not available in this browser");
@@ -463,6 +485,12 @@
         encoderFrames,
       );
 
+      artifactDiagnostics = {
+        ...(artifactDiagnostics ?? {}),
+        run_encoder_url: artifactUrls.encoder,
+        run_encoder_cached: artifactCache.encoder?.cached ?? false,
+        run_encoder_size_mb: Math.round((artifactCache.encoder?.size ?? 0) / 1024 / 1024),
+      };
       const encoderBytes = await readArtifact("encoder");
       const encoder = new ONNXModel(encoderBytes);
       const encoderOps = [...new Set(encoder.model.graph?.node.map((node) => node.opType) ?? [])];
