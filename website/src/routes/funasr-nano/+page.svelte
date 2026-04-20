@@ -493,7 +493,33 @@
       };
       const encoderBytes = await readArtifact("encoder");
       const encoder = new ONNXModel(encoderBytes);
+      const encoderInputsDeclared = encoder.model.graph?.input.map((value) => value.name) ?? [];
+      const encoderOutputsDeclared = encoder.model.graph?.output.map((value) => value.name) ?? [];
+      const encoderOutputDimsDeclared = encoder.model.graph?.output.map((value) =>
+        value.type?.value.case === "tensorType"
+          ? value.type.value.value.shape?.dim.map((dim) => {
+              if (dim.value.case === "dimValue") return Number(dim.value.value);
+              if (dim.value.case === "dimParam") return String(dim.value.value);
+              return null;
+            })
+          : null,
+      ) ?? [];
       const encoderOps = [...new Set(encoder.model.graph?.node.map((node) => node.opType) ?? [])];
+      artifactDiagnostics = {
+        ...(artifactDiagnostics ?? {}),
+        encoder_url: artifactUrls.encoder,
+        encoder_cached: artifactCache.encoder?.cached ?? false,
+        encoder_size_mb: Math.round((artifactCache.encoder?.size ?? encoderBytes.byteLength) / 1024 / 1024),
+        encoder_inputs_declared: encoderInputsDeclared,
+        encoder_outputs_declared: encoderOutputsDeclared,
+        encoder_output_dims_declared: encoderOutputDimsDeclared,
+        encoder_ops_declared: encoderOps,
+      };
+      if (encoderInputsDeclared.includes("input_lengths")) {
+        throw new Error(
+          "The cached encoder artifact is the raw encoder graph, not encoder_adaptor.onnx. Click Reset Cached Artifacts and download again.",
+        );
+      }
       const speechLengths = np.array(new Int32Array([encoderFrames]), {
         dtype: np.int32,
         shape: [1],
@@ -509,12 +535,9 @@
         );
       }
       artifactDiagnostics = {
-        encoder_url: artifactUrls.encoder,
-        encoder_cached: artifactCache.encoder?.cached ?? false,
-        encoder_size_mb: Math.round((artifactCache.encoder?.size ?? encoderBytes.byteLength) / 1024 / 1024),
+        ...(artifactDiagnostics ?? {}),
         encoder_inputs: encoderInputNames,
         encoder_outputs: encoderOutputNames,
-        encoder_ops: encoderOps,
         encoder_output_shape: encoderOut.shape,
       };
 
