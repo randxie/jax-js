@@ -36,7 +36,11 @@
   "module": "dist/index.js",
   "license": "MIT",
   "scripts": {
-    "build": "tsdown",
+    "build": "pnpm run build:jax && pnpm run build:loaders && pnpm run build:onnx && pnpm run build:optax",
+    "build:jax": "TSDOWN_CONFIG_NAME=jax tsdown",
+    "build:loaders": "TSDOWN_CONFIG_NAME=loaders tsdown",
+    "build:onnx": "TSDOWN_CONFIG_NAME=onnx tsdown",
+    "build:optax": "TSDOWN_CONFIG_NAME=optax tsdown",
     "build:watch": "TSDOWN_WATCH_MODE=1 tsdown",
     "check": "tsc",
     "docs": "tsx typedoc.ts",

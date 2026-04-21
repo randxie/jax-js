@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { defineConfig, type Options } from "tsdown";
 
 const watchMode = process.env.TSDOWN_WATCH_MODE === "1";
+const selectedConfigName = process.env.TSDOWN_CONFIG_NAME;
 
 // Common options for all packages.
 const opts: Options = {
@@ -22,7 +23,7 @@ const opts: Options = {
   },
 };
 
-export default defineConfig([
+const configs = [
   {
     name: "jax",
     ...opts,
@@ -35,4 +36,10 @@ export default defineConfig([
     cwd: `packages/${pkg}`,
     watch: watchMode && `packages/${pkg}/src`, // Unaffected by cwd.
   })),
-] as Options[]);
+] as Options[];
+
+export default defineConfig(
+  selectedConfigName
+    ? configs.filter((config) => config.name === selectedConfigName)
+    : configs,
+);
