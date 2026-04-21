@@ -30,6 +30,7 @@ type QwenLayer = {
 export type FunASRNanoQwen = {
   embedTokens: np.Array;
   embedTokensData: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>;
+  embedTokensDtype: "F16" | "BF16";
   norm: RMSNorm;
   layers: QwenLayer[];
   hiddenSize: number;
@@ -65,24 +66,36 @@ function f16BitsToFloat32(bits: number): number {
   return sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
 }
 
-function f16DataToFloat32(
+function bf16BitsToFloat32(bits: number): number {
+  const view = new DataView(new ArrayBuffer(4));
+  view.setUint32(0, bits << 16, true);
+  return view.getFloat32(0, true);
+}
+
+function halfDataToFloat32(
+  dtype: "F16" | "BF16",
   data: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
 ): Float32Array<ArrayBuffer> {
-  if (typeof Float16Array !== "undefined" && data instanceof Float16Array) {
+  if (
+    dtype === "F16" &&
+    typeof Float16Array !== "undefined" &&
+    data instanceof Float16Array
+  ) {
     return Float32Array.from(data);
   }
   const out = new Float32Array(data.length);
   for (let i = 0; i < data.length; i++) {
-    out[i] = f16BitsToFloat32(data[i]);
+    out[i] = dtype === "BF16" ? bf16BitsToFloat32(data[i]) : f16BitsToFloat32(data[i]);
   }
   return out;
 }
 
 function tensorToArray(tensor: st.Tensor): np.Array {
-  if (tensor.dtype !== "F16") {
-    throw new Error(`Expected F16 safetensor, got ${tensor.dtype}`);
+  if (tensor.dtype !== "F16" && tensor.dtype !== "BF16") {
+    throw new Error(`Expected F16/BF16 safetensor, got ${tensor.dtype}`);
   }
-  return np.array(f16DataToFloat32(
+  return np.array(halfDataToFloat32(
+    tensor.dtype,
     tensor.data as Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
   ), {
     dtype: np.float32,
@@ -91,6 +104,7 @@ function tensorToArray(tensor: st.Tensor): np.Array {
 }
 
 function gatherEmbeddingRows(
+  dtype: "F16" | "BF16",
   data: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
   hiddenSize: number,
   ids: number[],
@@ -99,18 +113,24 @@ function gatherEmbeddingRows(
   for (let i = 0; i < ids.length; i++) {
     const start = ids[i] * hiddenSize;
     for (let j = 0; j < hiddenSize; j++) {
-      out[i * hiddenSize + j] = f16BitsToFloat32(data[start + j]);
+      out[i * hiddenSize + j] =
+        dtype === "BF16" ? bf16BitsToFloat32(data[start + j]) : f16BitsToFloat32(data[start + j]);
     }
   }
   return out;
 }
 
 function gatherEmbeddingRowsTyped(
+  dtype: "F16" | "BF16",
   data: Float16Array<ArrayBuffer> | Uint16Array<ArrayBuffer>,
   hiddenSize: number,
   ids: number[],
 ): Float32Array<ArrayBuffer> {
-  if (typeof Float16Array !== "undefined" && data instanceof Float16Array) {
+  if (
+    dtype === "F16" &&
+    typeof Float16Array !== "undefined" &&
+    data instanceof Float16Array
+  ) {
     const out = new Float32Array(ids.length * hiddenSize);
     for (let i = 0; i < ids.length; i++) {
       const start = ids[i] * hiddenSize;
@@ -118,7 +138,7 @@ function gatherEmbeddingRowsTyped(
     }
     return out;
   }
-  return gatherEmbeddingRows(data, hiddenSize, ids);
+  return gatherEmbeddingRows(dtype, data, hiddenSize, ids);
 }
 
 function runLinear({ weight }: Linear, x: np.Array): np.Array {
@@ -349,7 +369,12 @@ function decodeFunASRNanoQwenStep(
 }
 
 export function embedTokenIds(model: FunASRNanoQwen, ids: number[]): np.Array {
-  return np.array(gatherEmbeddingRowsTyped(model.embedTokensData, model.hiddenSize, ids), {
+  return np.array(gatherEmbeddingRowsTyped(
+    model.embedTokensDtype,
+    model.embedTokensData,
+    model.hiddenSize,
+    ids,
+  ), {
     dtype: np.float32,
     shape: [ids.length, model.hiddenSize],
   });
@@ -363,6 +388,7 @@ export async function buildFunASRNanoInputEmbeds(
   audioEmbeds: np.Array,
 ): Promise<np.Array> {
   const data = gatherEmbeddingRowsTyped(
+    model.embedTokensDtype,
     model.embedTokensData,
     model.hiddenSize,
     sourceIds,
@@ -425,7 +451,7 @@ export function loadFunASRNanoQwenFromBuffers(
     ),
   );
   const embedTensor = file.tensors["model.embed_tokens.weight"];
-  if (!embedTensor || embedTensor.dtype !== "F16") {
+  if (!embedTensor || (embedTensor.dtype !== "F16" && embedTensor.dtype !== "BF16")) {
     throw new Error("Missing model.embed_tokens.weight");
   }
 
@@ -437,6 +463,7 @@ export function loadFunASRNanoQwenFromBuffers(
     embedTokensData: embedTensor.data as
       | Float16Array<ArrayBuffer>
       | Uint16Array<ArrayBuffer>,
+    embedTokensDtype: embedTensor.dtype,
     norm: { weight: nested.model.norm.weight },
     layers: nested.model.layers.map((layer: any) => ({
       inputLayernorm: { weight: layer.input_layernorm.weight },

@@ -391,6 +391,30 @@ pnpm install
 pnpm run build:watch
 ```
 
+If `pnpm build` fails on macOS with a `rolldown-plugin-dts` or
+`RUNTIME_MODULE_SYMBOL_NOT_FOUND` error, your local build toolchain is likely newer than the
+versions pinned in this repo. Reinstall from the lockfile and rebuild:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+If that still picks up a newer `tsdown` or `rolldown` than the lockfile, remove `node_modules` and
+reinstall:
+
+```bash
+rm -rf node_modules
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+The expected build output should include:
+
+```text
+tsdown v0.13.2 powered by rolldown v1.0.0-beta.30
+```
+
 Then you can run tests in a headless browser using [Vitest](https://vitest.dev/).
 
 ```bash

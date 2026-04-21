@@ -1,5 +1,6 @@
 /** Supported data types for loading from Safetensors format. */
 export type DType =
+  | "BF16" // Uint16Array storing bfloat16 bits
   | "F16" // Float16Array
   | "F32" // Float32Array
   | "F64" // Float64Array
@@ -20,6 +21,7 @@ export type Tensor = {
 };
 
 export type TensorData =
+  | Uint16Array
   | Float16Array
   | Float32Array
   | Float64Array
@@ -82,6 +84,9 @@ export function parse(data: Uint8Array<ArrayBuffer> | ArrayBuffer): File {
     const byteLength = data_offsets[1] - data_offsets[0];
     let data: TensorData;
     switch (dtype) {
+      case "BF16":
+        data = new Uint16Array(buffer, byteOffset, byteLength / 2);
+        break;
       case "F16":
         data = new Float16Array(buffer, byteOffset, byteLength / 2);
         break;
