@@ -21,6 +21,8 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - `browser-side microphone input device selection`: done
 - `browser-side hosted encoder+adaptor default artifact`: done
 - `onnx Split num_outputs inference for hosted FunASR encoder+adaptor`: done
+- `browser-side runtime ONNX lowering to jax-js-native encoder execution`: done
+- `browser-side progress logging + Playwright route harness`: done
 - `VAD / long-audio segmentation`: not started
 - `timestamps`: not started
 
@@ -42,6 +44,13 @@ Goal: support `https://github.com/FunAudioLLM/Fun-ASR` in `jax-js`, with the cur
 - Browser-side Playwright/WebGPU e2e verification now exists against `/funasr-nano`.
 - Browser-side microphone capture now exists in `/funasr-nano`.
 - Browser-side artifact download and OPFS cache management now exists in `/funasr-nano`.
+- Browser-side `/funasr-nano` no longer calls `ONNXModel.run(...)` for encoder inference.
+  It now lowers the downloaded encoder ONNX once into a jax-js-native executable graph
+  with `LoweredONNXModel`, then executes that lowered graph.
+- Browser-side Playwright route harness now exists in `scripts/verify_funasr_nano_browser.ts`.
+  It drives the actual `/funasr-nano` page, resets cached artifacts, downloads the
+  configured files, records fake microphone input, runs inference, and captures
+  transcript/runtime/diagnostics/progress-log output.
 
 ## Latest Verification
 
@@ -95,7 +104,14 @@ Ran on the local assets already present in `.download/`:
 - `website/src/routes/funasr-nano/+page.svelte`
   - result: model artifacts can now be downloaded from URLs into browser-local OPFS cache
   - result: cached artifacts are reused and only missing URLs are fetched
-  - note: default URLs assume the encoder and LLM artifacts are hosted at `/models/funasr/...`
+  - result: encoder execution now uses runtime ONNX lowering into a jax-js-native graph
+  - result: the page exposes a stage-by-stage progress log for browser debugging
+- `npx pnpm exec tsx scripts/verify_funasr_nano_browser.ts --url http://127.0.0.1:4180/funasr-nano --audio .artifacts/local/funasr_nano_zh.wav --timeout-ms 180000`
+  - result: preview-browser route reaches:
+    `goto -> reset-cache -> download-artifacts -> record-start -> record-stop -> run -> wait-result`
+  - result: the old immediate `Unsupported ONNX operation: Range` failure is no longer reproduced
+    at route startup on the lowered encoder path
+  - note: the route still waits in later-stage inference and has not yet been re-verified to final transcript completion on this new path
 
 ## Main Findings
 

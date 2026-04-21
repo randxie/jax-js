@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import { defaultDevice, init, numpy as np } from "@jax-js/jax";
   import { cachedFetch, opfs, tokenizers } from "@jax-js/loaders";
-  import { ONNXModel } from "@jax-js/onnx";
+  import { LoweredONNXModel } from "@jax-js/onnx";
   import {
     AudioLinesIcon,
     CpuIcon,
@@ -72,6 +72,7 @@
   let generatedIds = $state<number[]>([]);
   let runMeta = $state<Record<string, unknown> | null>(null);
   let artifactDiagnostics = $state<Record<string, unknown> | null>(null);
+  let progressLog = $state<string[]>([]);
   let maxNewTokens = $state(16);
   let artifactsReady = $state(false);
   let isPreparingArtifacts = $state(false);
@@ -88,6 +89,13 @@
   let mediaRecorder: MediaRecorder | null = null;
   let recordingChunks: Blob[] = [];
   let downloadManager: DownloadManager;
+
+  function pushProgress(message: string) {
+    progressLog = [
+      ...progressLog,
+      `${new Date().toLocaleTimeString("en-US", { hour12: false })} ${message}`,
+    ];
+  }
 
   function missingArtifactUrls(): string[] {
     return (Object.keys(fileLabels) as ArtifactKey[])
@@ -138,7 +146,7 @@
   }
 
   function runEncoderCompat(
-    encoder: ONNXModel,
+    encoder: LoweredONNXModel,
     speech: Float32Array,
     shape: [number, number, number],
     speechLengths: np.Array,
@@ -244,18 +252,22 @@
 
     isPreparingArtifacts = true;
     errorMessage = null;
+    pushProgress("Preparing artifact cache");
     try {
       for (const key of Object.keys(fileLabels) as ArtifactKey[]) {
         const url = artifactUrls[key].trim();
         const cached = await opfs.info(url);
         if (!cached) {
+          pushProgress(`Downloading ${fileLabels[key]}`);
           await downloadManager.fetch(fileLabels[key], url);
         }
       }
       await refreshArtifactCache();
+      pushProgress("Artifact cache ready");
     } catch (error) {
       status = "error";
       errorMessage = error instanceof Error ? error.message : String(error);
+      pushProgress(`Artifact preparation failed: ${errorMessage}`);
       throw error;
     } finally {
       isPreparingArtifacts = false;
@@ -274,6 +286,7 @@
     isPreparingArtifacts = true;
     errorMessage = null;
     try {
+      pushProgress("Resetting cached artifacts");
       for (const key of Object.keys(fileLabels) as ArtifactKey[]) {
         const url = artifactUrls[key].trim();
         if (!url) continue;
@@ -281,9 +294,11 @@
       }
       artifactDiagnostics = null;
       await refreshArtifactCache();
+      pushProgress("Cached artifacts cleared");
     } catch (error) {
       status = "error";
       errorMessage = error instanceof Error ? error.message : String(error);
+      pushProgress(`Cache reset failed: ${errorMessage}`);
       throw error;
     } finally {
       isPreparingArtifacts = false;
@@ -387,6 +402,7 @@
     try {
       clearRecordedAudio();
       errorMessage = null;
+      pushProgress("Starting microphone recording");
 
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
@@ -425,6 +441,7 @@
         recordedAudio = new File([blob], "microphone.webm", { type: blob.type });
         recordedAudioUrl = URL.createObjectURL(blob);
         recordingState = "ready";
+        pushProgress("Recording complete");
         stopMediaStream();
         mediaRecorder = null;
         recordingChunks = [];
@@ -464,17 +481,22 @@
     generatedIds = [];
     runMeta = null;
     artifactDiagnostics = null;
+    progressLog = [];
 
     try {
       validateEncoderUrl(artifactUrls.encoder);
+      pushProgress("Initializing jax-js backend");
       const devices = await init("webgpu");
       if (!devices.includes("webgpu")) {
         throw new Error("WebGPU backend is not available in this browser");
       }
       defaultDevice("webgpu");
+      pushProgress("WebGPU backend ready");
 
+      pushProgress("Decoding recorded audio");
       const decodedWaveform = await decodeBrowserAudio(recordedAudio, frontendConfig.fs);
       const waveform = trimWaveformSilence(decodedWaveform);
+      pushProgress("Extracting frontend features");
       const extracted = await extractFunASRNanoSpeech(
         waveform,
         frontendConfig,
@@ -491,8 +513,9 @@
         run_encoder_cached: artifactCache.encoder?.cached ?? false,
         run_encoder_size_mb: Math.round((artifactCache.encoder?.size ?? 0) / 1024 / 1024),
       };
+      pushProgress("Loading and lowering encoder model");
       const encoderBytes = await readArtifact("encoder");
-      const encoder = new ONNXModel(encoderBytes);
+      const encoder = new LoweredONNXModel(encoderBytes);
       const encoderInputsDeclared = encoder.model.graph?.input.map((value) => value.name) ?? [];
       const encoderOutputsDeclared = encoder.model.graph?.output.map((value) => value.name) ?? [];
       const encoderOutputDimsDeclared = encoder.model.graph?.output.map((value) =>
@@ -520,6 +543,7 @@
           "The cached encoder artifact is the raw encoder graph, not encoder_adaptor.onnx. Click Reset Cached Artifacts and download again.",
         );
       }
+      pushProgress("Running lowered encoder");
       const speechLengths = np.array(new Int32Array([encoderFrames]), {
         dtype: np.int32,
         shape: [1],
@@ -540,7 +564,9 @@
         encoder_outputs: encoderOutputNames,
         encoder_output_shape: encoderOut.shape,
       };
+      pushProgress("Encoder completed");
 
+      pushProgress("Loading tokenizer");
       const tokenizer = tokenizers.HuggingFaceBPE.fromBinary(
         await readArtifact("tokenizer"),
       );
@@ -549,12 +575,15 @@
         recordedAudio.name,
         shape[1],
       );
+      pushProgress("Tokenizer and prompt preparation completed");
 
+      pushProgress("Loading Qwen weights");
       const qwen = loadFunASRNanoQwenFromBuffers(
         await readArtifact("llm"),
         new TextDecoder().decode(await readArtifact("config")),
         new TextDecoder().decode(await readArtifact("generationConfig")),
       );
+      pushProgress("Building input embeddings");
       const baseEmbeds = await buildFunASRNanoInputEmbeds(
         qwen,
         prepared.sourceIds,
@@ -562,6 +591,7 @@
         prepared.fakeTokenLen,
         encoderOut,
       );
+      pushProgress("Running greedy generation");
 
       const ids = await generateFunASRNanoGreedy(qwen, baseEmbeds, maxNewTokens);
       generatedIds = ids;
@@ -581,10 +611,12 @@
         fake_token_len: prepared.fakeTokenLen,
       };
       status = "done";
+      pushProgress("Run completed");
     } catch (error) {
       console.error(error);
       status = "error";
       errorMessage = error instanceof Error ? error.message : String(error);
+      pushProgress(`Run failed: ${errorMessage}`);
     }
   }
 
@@ -838,6 +870,13 @@
             Artifact Diagnostics
           </p>
           <pre class="overflow-x-auto rounded-2xl bg-stone-100 p-4 text-sm leading-6 text-stone-700">{artifactDiagnostics ? JSON.stringify(artifactDiagnostics, null, 2) : "{}"}</pre>
+        </div>
+
+        <div class="rounded-[2rem] border border-stone-300/60 bg-white/90 p-6 shadow-[0_16px_50px_rgba(64,64,32,0.08)]">
+          <p class="mb-3 text-sm uppercase tracking-[0.22em] text-stone-500">
+            Progress Log
+          </p>
+          <pre class="overflow-x-auto rounded-2xl bg-stone-100 p-4 text-sm leading-6 text-stone-700">{progressLog.length > 0 ? progressLog.join("\n") : "[]"}</pre>
         </div>
       </div>
     </div>

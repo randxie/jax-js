@@ -46,6 +46,7 @@
     "funasr:export-llm": ".venv/bin/python scripts/export_funasr_nano_llm.py",
     "funasr:verify-e2e": "tsx scripts/verify_funasr_nano_e2e.ts",
     "funasr:verify-audio": "tsx scripts/verify_funasr_nano_audio.ts",
+    "funasr:verify-browser": "tsx scripts/verify_funasr_nano_browser.ts",
     "funasr:verify-frontend": "tsx scripts/verify_funasr_nano_frontend.ts",
     "funasr:verify-prepare": "tsx scripts/verify_funasr_nano_prepare.ts",
     "funasr:verify-tokenizer": "tsx scripts/verify_funasr_nano_tokenizer.ts",
